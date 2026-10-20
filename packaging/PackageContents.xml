@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" ProductType="Application"
+    Name="Block AI" AppVersion="0.1.0" Description="Generate editable 2D blocks from text"
+    Author="Block AI" ProductCode="{1B7FBA61-8401-4D6B-97D0-0CDBBD1860DD}"
+    UpgradeCode="{2D90BBEF-2D43-4EC1-B650-FA3C7951B073}">
+  <CompanyDetails Name="Block AI" />
+  <Components>
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.1" SeriesMax="R25.1" />
+    <ComponentEntry AppName="Block AI" Version="0.1.0" ModuleName="./Contents/Windows/BlockAI.dll"
+        AppDescription="2D prompt-to-block palette" LoadOnAutoCADStartup="True">
+      <Commands GroupName="BLOCKAI">
+        <Command Global="AIBLOCK" Local="AIBLOCK" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>
