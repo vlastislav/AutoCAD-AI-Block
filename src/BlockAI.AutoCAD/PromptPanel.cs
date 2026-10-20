@@ -48,7 +48,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.2 · 2D geometry from your description");
+        Label("v0.2.1 · 2D geometry from your description");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");

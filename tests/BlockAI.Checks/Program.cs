@@ -72,6 +72,8 @@ var localHandler = new FakeHandler(async (request, ct) =>
     Check(!body.RootElement.GetProperty("stream").GetBoolean(), "Ollama requests complete JSON");
     Check(body.RootElement.GetProperty("format").GetProperty("type").GetString() == "object", "Ollama receives geometry schema");
     Check(body.RootElement.GetProperty("model").GetString() == OllamaClient.DefaultModel, "Ollama model selection");
+    Check(body.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32() == 8192, "local context bounded for desktop GPU");
+    Check(body.RootElement.GetProperty("format").GetProperty("properties").GetProperty("entities").GetProperty("maxItems").GetInt32() == 40, "local schema limits output complexity");
     return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { done = true, done_reason = "stop", response = encoded })) };
 });
 var localResult = await new OllamaClient(new HttpClient(localHandler)).GenerateAsync("bed", OllamaClient.DefaultModel, default);

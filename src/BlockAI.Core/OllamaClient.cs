@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace BlockAI.Core;
 
@@ -27,16 +28,23 @@ public sealed class OllamaClient(HttpClient http)
         model = model.Trim();
         if (model.EndsWith(":cloud", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Select a local model; cloud models are disabled in this mode.");
-        using var schema = JsonDocument.Parse(AiClient.Schema);
+        var schema = JsonNode.Parse(AiClient.Schema)!;
+        schema["properties"]!["entities"]!["maxItems"] = 40;
+        schema["properties"]!["entities"]!["items"]!["properties"]!["points"]!["maxItems"] = 32;
+        schema["properties"]!["assumptions"]!["maxItems"] = 8;
         var input = prompt;
         for (var attempt = 0; attempt < 2; attempt++)
         {
             var body = new
             {
                 model, prompt = input,
-                system = AiClient.Instructions + "\nPrefer at most 60 entities. Use this JSON schema exactly:\n" + AiClient.Schema,
-                format = schema.RootElement, stream = false, keep_alive = "5m",
-                options = new { temperature = 0, num_ctx = 16384, num_predict = 8192 }
+                system = AiClient.Instructions
+                    + "\nUse 6–12 simple entities when possible. No more than 40 entities, 32 points per entity."
+                    + "\nReturn compact JSON. Do not add whitespace after the final closing brace."
+                    + "\nExample closed rectangle primitive: {\"kind\":\"polyline\",\"points\":[{\"x\":0,\"y\":0},{\"x\":100,\"y\":0},{\"x\":100,\"y\":200},{\"x\":0,\"y\":200}],\"center\":{\"x\":0,\"y\":0},\"radius\":0,\"closed\":true}."
+                    + "\nUse this JSON schema exactly:\n" + schema.ToJsonString(),
+                format = schema, stream = false, keep_alive = "5m",
+                options = new { temperature = 0, num_ctx = 8192, num_predict = 4096 }
             };
             using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint + "/api/generate")
             {

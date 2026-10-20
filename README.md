@@ -47,6 +47,8 @@ Application: `D:\Ollama\app`; models: `D:\Ollama\models`; logs: `D:\Ollama\logs`
 
 The launcher sets storage variables for its child process, disables Ollama cloud features, and binds only to loopback. It does not change global PATH, install a Windows service, or add a startup task. Click **Start local AI** after reboot. The panel's launcher expects `D:\Ollama\start-ollama.ps1`; custom installation locations can be started manually.
 
+Local requests use an 8192-token context and compact JSON, with a schema limit of 40 entities and 32 points per entity, to keep simple blocks practical on an 8 GB GPU.
+
 **Check models** lists installed local models. A missing model must be downloaded using `ollama.exe pull`. The client does not download models or silently fall back to paid cloud generation. Geometry failing validation gets at most one local repair attempt. Cancel is available; generation has a ten-minute timeout.
 
 ## Behavior and limits
@@ -65,6 +67,8 @@ The launcher sets storage variables for its child process, disables Ollama cloud
 `tests/BlockAI.Checks` checks dimensions, serialization, unit conversion, invalid geometry rejection, both providers' requests/responses, local repair, cloud-model rejection, model discovery, and HTTP errors using fake HTTP handlers. It makes no paid API requests. Pass `--local-smoke` to run an actual local king-bed generation and save the validated result to `artifacts-next/local-bed-smoke.json`. A successful compilation verifies references to the installed AutoCAD API. Interactive loading, UCS placement, undo, and palette docking still require an AutoCAD smoke test.
 
 `tests/BlockAI.PanelChecks` is an optional Windows UI smoke test. It exercises the actual panel off-screen, with the AutoCAD insertion bridge stubbed. It checks provider defaults, per-provider model retention, key-field visibility, preview/insertion state, and live Ollama model discovery. Start Ollama first and create `artifacts-next` before running it; it saves `artifacts-next/panel-local-preview.png`.
+
+A live local bed test completed with parseable, validated geometry, but its dimensions and visual layout did not fully match the request. The current validator checks geometry integrity, not furniture recognition or compliance with the requested dimensions. Web reference search, CAD catalog import, image tracing, and reliable parametric furniture generation are not implemented yet.
 
 ## GitHub
 
