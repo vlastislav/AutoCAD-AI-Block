@@ -15,7 +15,14 @@ $html=[IO.File]::ReadAllText((Join-Path $outputRoot 'viewer-demo.html'))
 $html=$html.Replace('</body>',"<script>const fixtures=$fixtureJson;`n$checks</script></body>")
 $harness=Join-Path $outputRoot 'viewer-browser-checks.html'
 [IO.File]::WriteAllText($harness,$html)
-foreach($width in @(1600,720)){
+foreach($width in @(1600,720,960)){
+    if($width -eq 960){
+        # Also open the source viewer itself, with no generated recording embedded.
+        $empty=[IO.File]::ReadAllText((Join-Path $projectRoot 'src\BlockAI.Core\DesignViewer.html'))
+        $smoke='<script>const report=document.createElement("pre");report.id="viewer-test-results";const ok=Boolean(window.blockAIViewer)&&document.getElementById("error").hidden&&!document.getElementById("empty").hidden;report.dataset.passed=String(ok);report.textContent=ok?"VIEWER_CHECKS_PASSED 1":"VIEWER_CHECKS_FAILED empty viewer";document.body.append(report);</script>'
+        $harness=Join-Path $outputRoot 'viewer-empty-checks.html'
+        [IO.File]::WriteAllText($harness,$empty.Replace('</body>',$smoke+'</body>'))
+    }
     $profile=Join-Path $projectRoot ".tools\viewer-checks-$width"
     $stdout=Join-Path $outputRoot "viewer-browser-$width.html"
     $stderr=Join-Path $outputRoot "viewer-browser-$width.log"

@@ -4,9 +4,11 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a 2D plan, and insert it as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
-## v0.4.3: standalone visual debugging viewer
+## v0.4.4: standalone visual debugging viewer
 
-Open `artifacts-v043\design-viewer.html` in a browser to explore the clearly labeled demonstration recording. It replays real engine construction around scripted designer/reviewer replies: an overlapping first draft fails validation, a second draft receives visual feedback, and a third draft succeeds. Demo timings are test execution times, not AI inference benchmarks.
+v0.4.4 fixes the JSON placeholder error when opening the source viewer without embedded recording data. The empty viewer now opens normally and lets you import a recording; generated HTML exports embed validated JSON. Browser checks cover both the demo and the empty source viewer.
+
+Open `artifacts-v044\design-viewer.html` in a browser to explore the clearly labeled demonstration recording. It replays real engine construction around scripted designer/reviewer replies: an overlapping first draft fails validation, a second draft receives visual feedback, and a third draft succeeds. Demo timings are test execution times, not AI inference benchmarks.
 
 In the updated plugin, generate a design and click **Open design viewer**. Success, exhausted retries, model/network errors, and cancellation are saved locally as paired JSON/HTML files in `%LOCALAPPDATA%\BlockAI\DesignRecordings`. The button opens the most recently saved recording; it also finds previous recordings after the panel is reopened. Save errors are shown separately and do not prevent insertion. Files are kept until you delete them; a hard process termination before the generation's `finally` block can prevent saving.
 
@@ -16,15 +18,15 @@ Compare any two attempts using the same viewport and scale. A successful attempt
 
 HTML files are self-contained and need no AutoCAD, Ollama, server, internet connection or third-party web libraries. Open or drop a recording JSON file to inspect another run. **Save JSON** and **Save HTML** export the loaded recording. Imports accept schema version 1 up to 25 MB. This records observable tool requests and engine operations, not private model reasoning. It contains typed requests, model names, part arguments, geometry, timings and feedback; no API key field, request headers, preview images, screen captures or unrelated drawing contents are recorded. Recordings can contain sensitive design descriptions, so review them before sharing.
 
-The local part-based workflow has the full replay. Legacy OpenAI mode records its final validated geometry and errors, but cannot show part construction stages that it does not perform. Existing recordings from before v0.4.3 cannot recover missing historical stages. This viewer diagnoses design quality; it does not improve the model or certify a design.
+The local part-based workflow has the full replay. Legacy OpenAI mode records its final validated geometry and errors, but cannot show part construction stages that it does not perform. Existing recordings from before v0.4.4 cannot recover missing historical stages. This viewer diagnoses design quality; it does not improve the model or certify a design.
 
 ### Build and verification
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -OutputDirectory artifacts-v043 -CheckViewer
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -OutputDirectory artifacts-v044 -CheckViewer
 ```
 
-The build runs 68 core checks and 66 construction/recording checks, and generates the portable demo. `-CheckViewer` additionally runs 23 real headless Edge checks at each of desktop and narrow widths for playback, comparison scale, part inspection, failed/canceled replay, local imports, exports and escaped text. Screenshots and browser reports are written to `artifacts-design`. To use another Chromium executable, run `scripts\check-viewer.ps1 -Browser 'path\to\browser.exe'` after the build. `tests/BlockAI.PanelChecks` separately checks the palette with a stubbed AutoCAD insertion bridge; it does not test native AutoCAD itself. A local `qwen3.5:4b` generation with visual review also completed and recorded successfully in 11.5 seconds on this machine.
+The build runs 68 core checks and 67 construction/recording checks, and generates the portable demo. `-CheckViewer` additionally runs 24 real headless Edge checks at each of desktop and narrow widths for playback, comparison scale, part inspection, failed/canceled replay, local imports, exports and escaped text. Screenshots and browser reports are written to `artifacts-design`. To use another Chromium executable, run `scripts\check-viewer.ps1 -Browser 'path\to\browser.exe'` after the build. `tests/BlockAI.PanelChecks` separately checks the palette with a stubbed AutoCAD insertion bridge; it does not test native AutoCAD itself. A local `qwen3.5:4b` generation with visual review also completed and recorded successfully in 11.5 seconds on this machine.
 
 Diagnostic snapshots retain up to 500 outlines per step, with an explicit notice if an invalid oversized assembly exceeds that limit. All original part arguments remain recorded, and the full assembly is still validated normally. This limit affects replay data, not accepted block geometry.
 
@@ -44,8 +46,8 @@ The review sends a PNG rendered from the generated block, the typed request and 
 
 ### Install and test this build
 
-1. Close every AutoCAD window, reopen AutoCAD and `NETLOAD` the new DLL. For the current prepared build use `artifacts-v043\BlockAI.bundle\Contents\Windows\BlockAI.dll`, keeping `BlockAI.Core.dll` beside it.
-2. Run `AIBLOCK` and confirm the **v0.4.3** label. Use local model `qwen3.5:4b` for design/review.
+1. Close every AutoCAD window, reopen AutoCAD and `NETLOAD` the new DLL. For the current prepared build use `artifacts-v044\BlockAI.bundle\Contents\Windows\BlockAI.dll`, keeping `BlockAI.Core.dll` beside it.
+2. Run `AIBLOCK` and confirm the **v0.4.4** label. Use local model `qwen3.5:4b` for design/review.
 3. Generate, review the preview and size, select the actual drawing units, then click **Insert into drawing** and pick a point. Esc cancels placement.
 
 The insertion button now enters AutoCAD command context directly, focuses the drawing and reports success/cancellation/errors back to the palette. Finish any active AutoCAD command before inserting. `AIBLOCKINSERT` can retry the last insertion from the command line in the same drawing. The user confirmed insertion works in their AutoCAD session. Undo and non-default UCS behavior still need separate interactive checks; the off-screen UI tests stub the native bridge.

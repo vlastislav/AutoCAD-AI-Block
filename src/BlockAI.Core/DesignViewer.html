@@ -27,7 +27,7 @@
 <aside class="card inspector"><div class="pad"><div><h2>Inspect a part</h2><div id="parts"></div><p id="partInfo" class="muted">Select a part or click an outline.</p><p id="connections"></p><pre id="parameters" hidden></pre></div><div><h2>Validation &amp; review</h2><p id="issue" class="issue"></p><p id="reviewText"></p><p class="muted" style="font-size:12px">These are recorded observations. A passed check or reviewer approval is not proof of a good design.</p></div></div></aside>
 </main></div>
 <footer>Local replay only · No AI calls · No screen captures · Shows observable actions, not private model reasoning. Recordings contain your request and generated designs; share them deliberately.</footer>
-<script id="recording" type="application/json">/*__RECORDING__*/null</script>
+<script id="recording" type="application/json">null</script>
 <script>
 'use strict';
 const $=id=>document.getElementById(id), NS='http://www.w3.org/2000/svg';
@@ -112,7 +112,8 @@ function play(){if(state.timer){stop();return;}if(!state.run)return;if(state.ind
 $('play').onclick=play;$('speed').onchange=()=>{if(state.timer){stop();play();}};for(const id of ['boxes','labels','overlay','compare'])$(id).onchange=render;
 $('exportJson').onclick=()=>download(JSON.stringify(state.run,null,2),'application/json','json');
 $('exportHtml').onclick=()=>{if(!state.run)return;const clone=document.documentElement.cloneNode(true);clone.querySelector('#recording').textContent=JSON.stringify(state.run).replace(/</g,'\\u003c');download('<!doctype html>\n'+clone.outerHTML,'text/html','html');};
-try{const initial=JSON.parse($('recording').textContent);if(initial)load(initial);}catch(e){showError(e);}
+function parseEmbedded(value){const data=value.trim();return data==='/*__RECORDING__*/null'?null:JSON.parse(data);}
+try{const initial=parseEmbedded($('recording').textContent);if(initial)load(initial);}catch(e){showError(e);}
 window.blockAIViewer={load,validate,getState:()=>({attempt:state.attempt,index:state.index,part:state.part,status:state.run?.status})};
 </script>
 </body></html>

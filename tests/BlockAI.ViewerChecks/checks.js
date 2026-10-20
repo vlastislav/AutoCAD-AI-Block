@@ -5,6 +5,7 @@
  const el=id=>document.getElementById(id);const api=window.blockAIViewer;
  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
  try{
+  check(parseEmbedded('null')===null&&parseEmbedded(' /*__RECORDING__*/null ')===null,'empty viewer and legacy placeholder open without a JSON parse error');
   check(api&&api.getState().attempt===3&&api.getState().status==='succeeded','portable HTML opens the latest recorded attempt');
   check(!el('notice').hidden&&el('notice').textContent.includes('DEMONSTRATION'),'scripted demonstration is clearly identified');
   check(el('left').querySelectorAll('.shape').length>3,'recorded geometry renders');

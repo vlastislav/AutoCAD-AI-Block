@@ -150,6 +150,12 @@ Check(!demoRecording.TrySave(demoPath!,out _,out var saveError)&&saveError is no
 var hostile=new DesignRecording {Prompt="</script><script>window.injected=true</script>",Model="scripted"};
 hostile.Finish("failed","Test escaping",0);
 Check(!hostile.ToHtml().Contains("</script><script>window.injected=true"),"HTML export escapes embedded user content");
+var embeddedHtml=demoRecording.ToHtml();
+const string dataOpen="<script id=\"recording\" type=\"application/json\">";
+var dataStart=embeddedHtml.IndexOf(dataOpen,StringComparison.Ordinal)+dataOpen.Length;
+var dataEnd=embeddedHtml.IndexOf("</script>",dataStart,StringComparison.Ordinal);
+using(var embedded=JsonDocument.Parse(embeddedHtml[dataStart..dataEnd]))
+    Check(embedded.RootElement.GetProperty("id").GetString()==demoRecording.Id,"HTML recording slot contains valid JSON rather than a template placeholder");
 Check(!demoRecording.ToJson().Contains("data:image")&&!demoRecording.ToJson().Contains("Authorization"),"recording excludes rendered images and HTTP headers");
 File.WriteAllText("artifacts-design/viewer-demo.html",demoRecording.ToHtml());
 File.WriteAllText("artifacts-design/viewer-demo.json",demoRecording.ToJson());

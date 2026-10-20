@@ -40,7 +40,10 @@ public sealed class DesignRecording
             ??throw new InvalidOperationException("The embedded design viewer is missing.");
         using var reader=new StreamReader(stream);
         // Default System.Text.Json escaping prevents user content from closing the script element.
-        return reader.ReadToEnd().Replace("/*__RECORDING__*/null",ToJson(),StringComparison.Ordinal);
+        const string slot="<script id=\"recording\" type=\"application/json\">null</script>";
+        var template=reader.ReadToEnd();
+        if(!template.Contains(slot,StringComparison.Ordinal))throw new InvalidOperationException("The viewer recording slot is missing.");
+        return template.Replace(slot,"<script id=\"recording\" type=\"application/json\">"+ToJson()+"</script>",StringComparison.Ordinal);
     }
 
     public bool TrySave(string directory,out string? htmlPath,out string? error)
