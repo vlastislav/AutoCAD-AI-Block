@@ -46,6 +46,7 @@ internal sealed class PromptPanel : UserControl
         Add(model);
         Add(generate);
         Add(cancel);
+        Add(status);
         Add(demo);
         Add(preview);
         Add(details);
@@ -54,7 +55,13 @@ internal sealed class PromptPanel : UserControl
         units.SelectedIndex = 0;
         Add(units);
         Add(insert);
-        Add(status);
+        // Keep progress and errors next to Generate, visible without scrolling to the bottom.
+        layout.SizeChanged += (_, _) =>
+        {
+            var width = Math.Max(100, layout.ClientSize.Width - layout.Padding.Horizontal - 8);
+            foreach (var label in layout.Controls.OfType<Label>())
+                label.MaximumSize = new Size(width, 0);
+        };
         Controls.Add(layout);
         generate.Click += async (_, _) => await GenerateAsync();
         cancel.Click += (_, _) => cancellation?.Cancel();
@@ -73,20 +80,30 @@ internal sealed class PromptPanel : UserControl
 
     private async Task GenerateAsync()
     {
+        if (string.IsNullOrWhiteSpace(apiKey.Text))
+        {
+            status.Text = "Enter an OpenAI API key above for AI generation, or click Load example king bed to try it offline.";
+            apiKey.Focus();
+            return;
+        }
         spec = null;
         preview.Spec = null;
         preview.Invalidate();
         details.Clear();
         SetBusy(true);
         status.Text = "Generating geometry…";
-        cancellation = new CancellationTokenSource();
+        cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         try
         {
             var generated = await new AiClient(Http).GenerateAsync(prompt.Text, apiKey.Text, model.Text, cancellation.Token);
-            ShowSpec(generated, "Ready. Review dimensions and assumptions before inserting.");
+            ShowSpec(generated, "Preview ready. Review dimensions, then click Insert into drawing and pick a point.");
         }
         catch (OperationCanceledException) { status.Text = "Generation canceled or timed out. You can try again."; }
-        catch (Exception ex) { status.Text = $"Could not generate: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            status.Text = $"Could not generate: {ex.Message}";
+            details.Text = status.Text;
+        }
         finally
         {
             cancellation.Dispose();

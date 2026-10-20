@@ -16,6 +16,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 For a different installation folder, pass `-AutoCADDir 'D:\Autodesk\AutoCAD 2026'`. The script prefers a project-local SDK at `.tools\dotnet`, if present, and runs dependency-free geometry/API checks before packaging.
 
+AutoCAD locks loaded plugin DLLs until it closes. To build while it is open, pass `-OutputDirectory artifacts-next`. Restart AutoCAD before loading an updated DLL; `NETLOAD` does not replace the assembly already loaded in that process.
+
 This machine's installed AutoCAD assemblies target .NET 8. Autodesk documents a .NET 10 transition for AutoCAD 2026 Update 1.2 and later. Rebuild and validate against that installation before distributing to updated machines; this prototype targets the local .NET 8 installation.
 
 ## Load and use
