@@ -13,8 +13,17 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     public static DesignPlan Parse(string json) => JsonSerializer.Deserialize<DesignPlan>(json, BlockSpec.JsonOptions)
         ?? throw new InvalidDataException("The model returned no design plan.");
 
-    public BlockSpec Build(string prompt)
+    public BlockSpec Build(string prompt,Action<ConstructionFrame>? observe=null)
     {
+        var origins=new Dictionary<Primitive,int>();
+        var built=new List<(string Role,Primitive Geometry)>();
+        var partIndex=-1;
+        void Emit(string stage,string message,int? focus=null,string units="normalized")
+        {
+            if(observe is null)return;
+            try {observe(new(stage,message+(built.Count>500?" Snapshot limited to the first 500 outlines; the full assembly still undergoes validation.":""),units,built.Take(500).Select(p=>new RecordedGeometry(origins.GetValueOrDefault(p.Geometry,-1),p.Role,p.Geometry)).ToArray(),focus));}
+            catch { /* A diagnostic observer cannot interrupt construction. */ }
+        }
         if(string.IsNullOrWhiteSpace(Name)||Name.Length>80||string.IsNullOrWhiteSpace(Description)||Description.Length>1000)
             throw new InvalidDataException("A design needs a short name and description.");
         // Reuse unit parsing only; no furniture geometry or category selection is used here.
@@ -26,9 +35,10 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
         var noCushions=Regex.IsMatch(prompt,@"\b(?:no|without)\s+(?:(?:a|any|seat)\s+)?(?:cushions?|cushioning|upholstery|padding)|\b(?:uncushioned|unupholstered)\b",RegexOptions.IgnoreCase);
         var noArms=Regex.IsMatch(prompt,@"\barmless\b|\b(?:no|without)\s+(?:arms|armrests?)\b",RegexOptions.IgnoreCase);
         var chair=Regex.IsMatch(prompt,@"\b(?:chair|armchair)\b",RegexOptions.IgnoreCase);
-        var built=new List<(string Role,Primitive Geometry)>();
         foreach(var part in Parts)
         {
+            partIndex++;
+            Emit("part-start","Constructing part "+(partIndex+1)+": "+part?.Role,partIndex);
             var localOutlines=new HashSet<string>();
             if(part is null||string.IsNullOrWhiteSpace(part.Role)||part.Role.Length>60||part.Points is null)
                 throw new InvalidDataException("Every part needs a role and a points array.");
@@ -95,7 +105,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
                         if(outline.Points.Any(p=>!double.IsFinite(p.X)||!double.IsFinite(p.Y)||Math.Abs(p.X)>16||Math.Abs(p.Y)>16))
                             throw new InvalidDataException($"Actual outline of '{part.Role}' is nonfinite or exceeds the supported coordinate range (-16 to 16).");
                         var key=string.Join(";",outline.Points.Select(p=>FormattableString.Invariant($"{p.X:F6},{p.Y:F6}")).OrderBy(v=>v,StringComparer.Ordinal));
-                        if(localOutlines.Add(key)) built.Add((role,outline));
+                        if(localOutlines.Add(key)) {built.Add((role,outline));origins[outline]=partIndex;}
                     }
                     Unique(geometry);
                     if(part.Mirror&&Math.Abs(px-(1-px-cellW))>.00001)
@@ -104,7 +114,9 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
                 Add(Map(0));
                 if(part.Inset>0) Add(Map(part.Inset*Math.Min(cellW,cellH)));
             }
+            Emit("part-built",FormattableString.Invariant($"{part.Role}: requested x={part.X:0.####}, y={part.Y:0.####}, w={part.W:0.####}, h={part.H:0.####}; resolved x={x:0.####}, y={y:0.####}, w={part.W:0.####}, h={height:0.####}. Alignment={part.Align}; repeat={part.Repeat} × {part.Count}; mirror={part.Mirror}; attachment={part.From} → {part.To}."),partIndex);
         }
+        Emit("assembled","All parts constructed; constraint checks follow.");
         if(built.Count>160) throw new InvalidDataException("The assembled design has too many parts.");
         if(chair&&(!built.Any(p=>p.Role.Contains("seat"))||!built.Any(p=>p.Role.Contains("back"))))
             throw new InvalidDataException("A chair plan must include separate seat and backrest roles.");
@@ -123,6 +135,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             uniqueBuilt.Add(item);
         }
         built=uniqueBuilt;
+        Emit("deduplicated","Removed identical repeated outlines with the same role; conflicting duplicates are rejected.");
         if(chair&&Regex.IsMatch(prompt,@"\b(?:oval|elliptical|round)\s+seat\b",RegexOptions.IgnoreCase)&&!Parts.Any(p=>p.Role.Contains("seat",StringComparison.OrdinalIgnoreCase)&&p.Shape=="ellipse"))
             throw new InvalidDataException("The request asks for an oval/round seat. Use the ellipse tool for the seat outline.");
         if(chair&&Regex.IsMatch(prompt,@"\btapered\s+seat\b",RegexOptions.IgnoreCase)&&!Parts.Any(p=>p.Role.Contains("seat",StringComparison.OrdinalIgnoreCase)&&p.Shape is "trapezoid" or "polygon"))
@@ -176,20 +189,32 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
         var all=built.SelectMany(b=>b.Geometry.Points).ToArray();
         var minX=all.Min(p=>p.X);var minY=all.Min(p=>p.Y);var spanX=all.Max(p=>p.X)-minX;var spanY=all.Max(p=>p.Y)-minY;
         if(spanX<.1||spanY<.1) throw new InvalidDataException("The design has degenerate overall extents.");
+        Emit("constraints-passed","Construction constraints passed. This does not prove visual accuracy.");
         if(chair)
         {
             // Rear supports lie below opaque seat/back surfaces in plan. Remove their hidden
             // segments mathematically, rather than asking the model to trace intersections.
             var opaque=built.Where(b=>b.Role is "seat" or "back" or "backrest").Select(b=>b.Geometry).Where(p=>p.Closed).ToArray();
-            built=built.SelectMany(item=>item.Role.Contains("support")
-                ?VisibleSegments(item.Geometry,opaque).Select(g=>(item.Role,Geometry:g))
-                :new[]{item}).ToList();
+            var visible=new List<(string Role,Primitive Geometry)>();
+            foreach(var item in built)
+            {
+                foreach(var g in item.Role.Contains("support")?VisibleSegments(item.Geometry,opaque):new[]{item.Geometry})
+                {origins[g]=origins.GetValueOrDefault(item.Geometry,-1);visible.Add((item.Role,g));}
+            }
+            built=visible;
+            Emit("hidden-edges","Clipped support edges beneath opaque seat/back surfaces.");
         }
         var geometry=built.Select(b=>b.Geometry with {Points=b.Geometry.Points.Select(p=>new Point2((p.X-minX)*width/spanX,(p.Y-minY)*depth/spanY)).ToArray()}).ToArray();
         var spec=new BlockSpec(Name,Description,["AI composed this design from geometric tools; no furniture template was selected.",
             $"Overall footprint fitted to {width:0.##} × {depth:0.##} mm. Parts: {string.Join(", ",Parts.Select(p=>p.Role).Distinct())}.",
             "Checked: finite geometry, footprint, duplicates, declared negative constraints, and seat/back separation. Visual recognition is a separate review."],geometry);
         spec.Validate();
+        if(observe is not null)
+        {
+            try {observe(new("fitted",FormattableString.Invariant($"Translated origin ({minX:0.####}, {minY:0.####}); scaled X by {width/spanX:0.####} and Y by {depth/spanY:0.####} to {width:0.##} × {depth:0.##} mm. Individual parts were not moved separately."),"mm",
+                geometry.Select((g,i)=>new RecordedGeometry(origins.GetValueOrDefault(built[i].Geometry,-1),built[i].Role,g)).ToArray(),Fit:new(minX,minY,width/spanX,depth/spanY)));}
+            catch { /* Best effort diagnostics. */ }
+        }
         return spec;
     }
 

@@ -25,6 +25,10 @@ internal sealed class PromptPanel : UserControl
     private readonly Button demo = new() { Text = "Load example king bed", Height = 30 };
     private readonly Button insert = new() { Text = "Insert into drawing…", Enabled = false, Height = 36 };
     private readonly Button cancel = new() { Text = "Cancel generation", Enabled = false, Height = 28 };
+    private readonly Button openViewer = new() { Text = "Open design viewer", Enabled = false, Height = 30 };
+    private readonly Label recordingNote = new() { AutoSize = true, Text = "Local replay recordings are saved after generation." };
+    private static readonly string RecordingDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"BlockAI","DesignRecordings");
+    private string? latestRecording;
     private readonly Label status = new() { Text = "Describe a 2D block, or load the offline example.", AutoSize = true };
     private readonly TextBox details = new() { Multiline = true, ReadOnly = true, Height = 115, ScrollBars = ScrollBars.Vertical };
     private readonly BlockPreview preview = new() { Height = 220 };
@@ -50,7 +54,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.4.2 · Design, connect, check and revise");
+        Label("v0.4.3 · Design replay and visual debugging");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -69,6 +73,8 @@ internal sealed class PromptPanel : UserControl
         Add(generate);
         Add(cancel);
         Add(status);
+        Add(openViewer);
+        Add(recordingNote);
         Add(demo);
         Add(preview);
         Add(details);
@@ -129,6 +135,22 @@ internal sealed class PromptPanel : UserControl
             finally { SetBusy(false); }
         };
         generate.Click += async (_, _) => await GenerateAsync();
+        try
+        {
+            if(Directory.Exists(RecordingDirectory))
+                latestRecording=Directory.EnumerateFiles(RecordingDirectory,"*.html").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+            openViewer.Enabled=latestRecording is not null;
+        }
+        catch { /* Previous recordings are optional. */ }
+        openViewer.Click += (_, _) =>
+        {
+            try
+            {
+                if(latestRecording is null||!File.Exists(latestRecording))throw new FileNotFoundException("Generate a design first to create a replay recording.");
+                Process.Start(new ProcessStartInfo(latestRecording){UseShellExecute=true});
+            }
+            catch(Exception ex) {recordingNote.Text="Could not open viewer: "+ex.Message;}
+        };
         cancel.Click += (_, _) => cancellation?.Cancel();
         demo.Click += (_, _) => ShowSpec(BlockSpec.DemoKingBed(), "Offline example ready. Check units, then insert.");
         insert.Click += async (_, _) =>
@@ -160,6 +182,7 @@ internal sealed class PromptPanel : UserControl
         details.Clear();
         SetBusy(true);
         var useLocal = IsLocal;
+        var recording=new DesignRecording {Prompt=prompt.Text,Model=model.Text,ReviewModel=useLocal&&visualReview.Checked?reviewModel.Text:null};
         status.Text = useLocal ? "Designing parts and layout…" : "Generating geometry…";
         cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(useLocal ? 10 : 3));
         try
@@ -169,20 +192,37 @@ internal sealed class PromptPanel : UserControl
             {
                 var progress=new Progress<string>(message=>{if(!IsDisposed)status.Text=message;});
                 var result=await new DesignAgent(new OllamaClient(LocalHttp)).GenerateAsync(prompt.Text,model.Text,
-                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token);
+                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording);
                 generated=result.Block;
             }
-            else generated=await new AiClient(Http).GenerateAsync(prompt.Text,apiKey.Text,model.Text,cancellation.Token);
+            else
+            {
+                recording.Add(1,"request","Legacy OpenAI direct-geometry workflow; part construction stages are unavailable. Credentials and request headers are not recorded.");
+                generated=await new AiClient(Http).GenerateAsync(prompt.Text,apiKey.Text,model.Text,cancellation.Token);
+                recording.Add(1,"fitted","Validated direct geometry returned; no part-based replay is available for this provider.",frame:new("fitted","Direct geometry","mm",generated.Entities.Select(g=>new RecordedGeometry(-1,"direct geometry",g)).ToArray()));
+                recording.Finish("succeeded","Direct geometry offered for insertion.",1);
+            }
             ShowSpec(generated, "Preview ready. Review dimensions, then click Insert into drawing and pick a point.");
         }
-        catch (OperationCanceledException) { status.Text = "Generation canceled or timed out. You can try again."; }
+        catch (OperationCanceledException)
+        {
+            if(recording.Status=="running")recording.Finish("canceled","Generation canceled or timed out.",useLocal?0:1);
+            status.Text = "Generation canceled or timed out. You can try again.";
+        }
         catch (Exception ex)
         {
+            if(recording.Status=="running")recording.Finish("failed",ex.Message,useLocal?0:1);
             status.Text = $"Could not generate: {ex.Message}";
             details.Text = status.Text;
         }
         finally
         {
+            if(recording.TrySave(RecordingDirectory,out var saved,out var error))
+            {
+                latestRecording=saved;
+                recordingNote.Text="Replay saved locally, including failed attempts. Open design viewer to inspect it.";
+            }
+            else recordingNote.Text=error;
             cancellation.Dispose();
             cancellation = null;
             SetBusy(false);
@@ -196,6 +236,7 @@ internal sealed class PromptPanel : UserControl
         visualReview.Enabled=reviewModel.Enabled=!busy;
         cancel.Enabled = busy;
         insert.Enabled = !busy && spec is not null;
+        openViewer.Enabled=!busy&&latestRecording is not null;
     }
 
     private void ShowSpec(BlockSpec generated, string message)

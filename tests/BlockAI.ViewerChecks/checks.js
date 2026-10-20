@@ -1,0 +1,58 @@
+// Runs inside a real, offline, headless browser against the generated standalone HTML.
+(async()=>{
+ const report=document.createElement('pre');report.id='viewer-test-results';document.body.append(report);
+ const results=[];const check=(ok,label)=>{if(!ok)throw Error(label);results.push('PASS '+label);};
+ const el=id=>document.getElementById(id);const api=window.blockAIViewer;
+ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ try{
+  check(api&&api.getState().attempt===3&&api.getState().status==='succeeded','portable HTML opens the latest recorded attempt');
+  check(!el('notice').hidden&&el('notice').textContent.includes('DEMONSTRATION'),'scripted demonstration is clearly identified');
+  check(el('left').querySelectorAll('.shape').length>3,'recorded geometry renders');
+  el('compare').value='2';el('compare').dispatchEvent(new Event('change'));
+  check(!el('rightView').hidden&&el('right').querySelectorAll('.shape').length>0,'revision comparison renders both attempts');
+  check(el('left').querySelector('text:last-child').textContent===el('right').querySelector('text:last-child').textContent,'comparison uses the same millimeter scale');
+  const rail=s=>s.querySelector('[data-part="1"][stroke-dasharray="none"]').getAttribute('points');
+  check(rail(el('left'))===rail(el('right')),'identical back rails retain identical screen coordinates between attempts');
+  el('parts').children[2].click();
+  check(el('parameters').textContent.includes('"from": "seat"')&&el('connections').textContent.includes('seat → backrest'),'part inspector exposes parameters and attachment roles');
+  el('attempts').children[1].click();
+  el('scrub').value=el('scrub').max;el('scrub').dispatchEvent(new Event('input'));
+  check(el('stageTitle').textContent==='Validation failed'&&el('issue').textContent.includes('overlap'),'failed attempt preserves geometry and exact validation error');
+  check(el('left').querySelectorAll('.shape').length>0,'failed geometry is inspectable');
+  el('attempts').children[3].click();
+  check(!el('left').querySelector('.shape')&&!el('parts').children.length,'timeline does not reveal future proposals before the model responds');
+  el('scrub').value=el('scrub').max;el('scrub').dispatchEvent(new Event('input'));
+  const prior=el('left').querySelectorAll('.shape').length;el('overlay').checked=false;el('overlay').dispatchEvent(new Event('change'));
+  check(el('left').querySelectorAll('.shape').length<prior,'AI-proposal overlay can be separated from engine output');
+  el('scrub').value=0;el('scrub').dispatchEvent(new Event('input'));el('speed').value='550';el('play').click();await wait(700);el('play').click();
+  check(api.getState().index>0&&el('play').textContent==='Play','playback advances and pauses');
+  const original=JSON.parse(fixtures.success);
+  api.load(JSON.parse(fixtures.failed));
+  check(api.getState().status==='failed'&&el('issue').textContent.includes('3 attempts'),'exhausted retries reopen offline');
+  api.load(JSON.parse(fixtures.canceled));
+  check(api.getState().status==='canceled'&&el('left').textContent.includes('No geometry'),'canceled request displays no fabricated geometry');
+  const malicious=structuredClone(original);malicious.prompt='</script><img src=x onerror="window.injected=true">';api.load(malicious);
+  check(!window.injected&&!el('prompt').querySelector('img')&&el('prompt').textContent===malicious.prompt,'imported user content renders as text');
+  let rejected=false;try{api.validate({schemaVersion:99,events:[]});}catch{rejected=true;}check(rejected,'unsupported replay versions are rejected');
+  const badGeometry=structuredClone(original);badGeometry.events.find(e=>e.frame?.geometry.length).frame.geometry[0].geometry.points[0].x=Infinity;
+  rejected=false;try{api.validate(badGeometry);}catch{rejected=true;}check(rejected,'nonfinite imported geometry is rejected');
+  const invalidProposal={...original,events:[{elapsedMs:0,attempt:1,stage:'proposal',message:'Malformed proposed parts',plan:{name:'Invalid plan',parts:null}},{elapsedMs:1,attempt:1,stage:'failed',message:'Every plan needs parts.'}],status:'failed'};
+  api.load(invalidProposal);check(api.getState().status==='failed'&&!el('left').querySelector('.shape'),'malformed proposal remains inspectable without inventing geometry');
+  const dt=new DataTransfer();dt.items.add(new File([fixtures.success],'recording.json',{type:'application/json'}));el('file').files=dt.files;el('file').dispatchEvent(new Event('change'));await wait(50);
+  check(api.getState().status==='succeeded'&&el('prompt').textContent===original.prompt,'local JSON file import restores a recording');
+  const create=URL.createObjectURL.bind(URL),blobs=[];URL.createObjectURL=blob=>{blobs.push(blob);return create(blob);};
+  const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){};
+  el('exportJson').click();el('exportHtml').click();HTMLAnchorElement.prototype.click=click;URL.createObjectURL=create;
+  check(blobs.length===2&&JSON.parse(await blobs[0].text()).events.length===original.events.length,'JSON export preserves the complete recording');
+  const exported=await blobs[1].text();
+  const parsed=new DOMParser().parseFromString(exported,'text/html');
+  check(JSON.parse(parsed.querySelector('#recording').textContent).events.length===original.events.length,'HTML export embeds replay data for reopening');
+  const hostileExport=structuredClone(original);hostileExport.prompt='</script><script>window.injected=true</script>';api.load(hostileExport);
+  URL.createObjectURL=blob=>{blobs.push(blob);return create(blob);};HTMLAnchorElement.prototype.click=function(){};el('exportHtml').click();HTMLAnchorElement.prototype.click=click;URL.createObjectURL=create;
+  const hostileHtml=await blobs.at(-1).text();const hostileDoc=new DOMParser().parseFromString(hostileHtml,'text/html');
+  check(JSON.parse(hostileDoc.querySelector('#recording').textContent).prompt===hostileExport.prompt&&!hostileHtml.includes('<script>window.injected=true</script>'),'HTML export safely roundtrips script-like prompt text');
+  api.load(original);el('compare').value='2';el('compare').dispatchEvent(new Event('change'));el('parts').children[2].click();
+  check(document.documentElement.scrollWidth<=innerWidth,'viewer fits the viewport without horizontal overflow');
+  report.textContent=results.join('\n')+'\nVIEWER_CHECKS_PASSED '+results.length;report.dataset.passed='true';
+ }catch(e){report.textContent=results.join('\n')+'\nVIEWER_CHECKS_FAILED '+e.stack;report.dataset.passed='false';}
+})();

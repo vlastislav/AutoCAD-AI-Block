@@ -92,6 +92,69 @@ using(var cancel=new CancellationTokenSource())
 {cancel.Cancel();try{await endless.GenerateAsync(request,"test",null,null,null,cancel.Token);throw new Exception("Canceled loop ran");}catch(OperationCanceledException){Check(true,"cancellation stops design loop");}}
 Directory.CreateDirectory("artifacts-design");
 File.WriteAllBytes("artifacts-design/toolkit-example.png",PlanRenderer.Png(block));
+
+// Record actual engine work around scripted model/reviewer replies. This is explicitly a demo.
+var demoRecording=new DesignRecording {Prompt=request,Model="scripted demonstration designer",ReviewModel="scripted demonstration reviewer",Demonstration=true};
+var demoCalls=0;
+var ovalPlan=plan with {Name="OvalDiningChair",Description="Oval seat with a thin rear rail and paired attachments",Parts=[ellipse,back,support with {X=.2,From="seat",To="backrest"}]};
+var demoAgent=new DesignAgent(new OllamaClient(new HttpClient(new Handler((_,_)=>Task.FromResult(++demoCalls switch
+{
+    1=>Reply(bad),
+    2=>Reply(encoded),
+    3=>Reply("{\"accepted\":false,\"issues\":[\"Demonstration feedback: try an oval seat to compare the silhouette.\"]}"),
+    4=>Reply(JsonSerializer.Serialize(ovalPlan,BlockSpec.JsonOptions)),
+    _=>Reply("{\"accepted\":true,\"issues\":[]}")
+})))));
+var demoResult=await demoAgent.GenerateAsync(request,"scripted","scripted",PlanRenderer.Png,null,default,demoRecording);
+Check(demoRecording.Status=="succeeded"&&demoResult.Attempts==3,"recording preserves three revision attempts through success");
+Check(demoRecording.Events.Any(e=>e.Attempt==1&&e.Stage=="validation-failed"&&e.Message.Contains("overlap")),"recording retains exact failed constraint feedback");
+Check(demoRecording.Events.Any(e=>e.Attempt==1&&e.Frame?.Geometry.Length>0),"failed attempt retains inspectable geometry");
+Check(demoRecording.Events.Count(e=>e.Plan is not null)==3&&demoRecording.Events.Count(e=>e.Stage=="response"&&e.RawResponse is not null)==3,"recording preserves proposed parts and original tool arguments");
+Check(demoRecording.Events.Any(e=>e.Attempt==2&&e.Review is {Accepted:false})&&demoRecording.Events.Any(e=>e.Attempt==3&&e.Review is {Accepted:true}),"reviewer rejection and acceptance recorded separately");
+Check(demoRecording.Events.Any(e=>e.Attempt==3&&e.Stage=="request"&&e.Message.Contains("oval seat")),"review correction is associated with the next request");
+Check(demoRecording.Events.Zip(demoRecording.Events.Skip(1),(a,b)=>b.ElapsedMs>=a.ElapsedMs).All(v=>v),"event timings are monotonic");
+var assembledFrame=demoRecording.Events.First(e=>e.Attempt==3&&e.Stage=="constraints-passed").Frame!;
+var clippedFrame=demoRecording.Events.First(e=>e.Attempt==3&&e.Stage=="hidden-edges").Frame!;
+Check(assembledFrame.Geometry.Any(g=>g.Role=="support"&&g.Geometry.Closed)&&clippedFrame.Geometry.Where(g=>g.Role=="support").All(g=>!g.Geometry.Closed),"recording distinguishes constructed supports from hidden-edge trimming");
+var fitFrame=demoRecording.Events.First(e=>e.Attempt==3&&e.Stage=="fitted").Frame!;
+Check(fitFrame.Units=="mm"&&fitFrame.Fit is not null&&fitFrame.Geometry.All(g=>g.PartId>=0),"final fitting transform and part identities recorded");
+Check(assembledFrame.Geometry.Length==4,"earlier snapshots remain unchanged after clipping");
+var tracedBlock=ovalPlan.Build(request,_=>throw new IOException("Simulated recording failure"));
+Check(JsonSerializer.Serialize(tracedBlock,BlockSpec.JsonOptions)==JsonSerializer.Serialize(ovalPlan.Build(request),BlockSpec.JsonOptions),"observer failure cannot alter generated geometry");
+var excessiveFrames=new List<ConstructionFrame>();
+var excessive=plan with {Parts=Enumerable.Range(0,24).Select(i=>Part("panel"+i,"rectangle",.1,0,.7,1) with {Count=8,Repeat="row",Mirror=true,Inset=.1}).ToArray()};
+Reject(()=>excessive.Build("panel",excessiveFrames.Add),"excessive assembly still fails normal geometry limits");
+Check(excessiveFrames.All(f=>f.Geometry.Length<=500)&&excessiveFrames.Any(f=>f.Message.Contains("Snapshot limited")),"oversized failed assembly has a bounded replay with explicit truncation notice");
+var failedRecording=new DesignRecording {Prompt=request,Model="scripted"};
+try{await endless.GenerateAsync(request,"test",null,null,null,default,failedRecording);}catch(InvalidDataException){}
+Check(failedRecording.Status=="failed"&&failedRecording.Events.Count(e=>e.Stage=="validation-failed")==3,"exhausted retries remain replayable as a failed run");
+var cancelRecording=new DesignRecording {Prompt=request,Model="scripted"};
+using(var cancelSource=new CancellationTokenSource())
+{
+    var interrupted=new DesignAgent(new OllamaClient(new HttpClient(new Handler(async(_,token)=>{cancelSource.Cancel();await Task.Delay(1000,token);return Reply(encoded);}))));
+    try{await interrupted.GenerateAsync(request,"test",null,null,null,cancelSource.Token,cancelRecording);}catch(OperationCanceledException){}
+}
+Check(cancelRecording.Status=="canceled"&&cancelRecording.Events.Any(e=>e.Stage=="request")&&cancelRecording.Events.All(e=>e.Plan is null),"cancellation during model request recorded without fabricated geometry");
+var jsonRecording=new DesignRecording {Prompt=request,Model="scripted"};
+var malformed=new DesignAgent(new OllamaClient(new HttpClient(new Handler((_,_)=>Task.FromResult(Reply("{not json"))))));
+try{await malformed.GenerateAsync(request,"test",null,null,null,default,jsonRecording);}catch(InvalidDataException){}
+Check(jsonRecording.Status=="failed"&&jsonRecording.Events.Count(e=>e.RawResponse=="{not json")==3,"invalid model JSON retained for diagnosis");
+var transportRecording=new DesignRecording {Prompt=request,Model="scripted"};
+var offline=new DesignAgent(new OllamaClient(new HttpClient(new Handler((_,_)=>throw new HttpRequestException("Simulated offline server")))));
+try{await offline.GenerateAsync(request,"test",null,null,null,default,transportRecording);}catch(Exception){}
+Check(transportRecording.Status=="failed"&&transportRecording.Events.Any(e=>e.Stage=="request"),"transport failure recorded before any proposed plan");
+Check(demoRecording.TrySave("artifacts-design/recordings",out var demoPath,out _),"recording saves portable HTML and JSON");
+var savedRecording=JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(demoPath!,".json")));
+Check(savedRecording.RootElement.GetProperty("events").GetArrayLength()==demoRecording.Events.Count,"saved JSON retains all replay events");
+Check(!demoRecording.TrySave(demoPath!,out _,out var saveError)&&saveError is not null&&demoRecording.Status=="succeeded","disk recording failure is reported without changing generation success");
+var hostile=new DesignRecording {Prompt="</script><script>window.injected=true</script>",Model="scripted"};
+hostile.Finish("failed","Test escaping",0);
+Check(!hostile.ToHtml().Contains("</script><script>window.injected=true"),"HTML export escapes embedded user content");
+Check(!demoRecording.ToJson().Contains("data:image")&&!demoRecording.ToJson().Contains("Authorization"),"recording excludes rendered images and HTTP headers");
+File.WriteAllText("artifacts-design/viewer-demo.html",demoRecording.ToHtml());
+File.WriteAllText("artifacts-design/viewer-demo.json",demoRecording.ToJson());
+File.WriteAllText("artifacts-design/viewer-failed.json",failedRecording.ToJson());
+File.WriteAllText("artifacts-design/viewer-canceled.json",cancelRecording.ToJson());
 Console.WriteLine($"{passed} design-loop checks passed.");
 
 if(args.Contains("--live"))
@@ -102,7 +165,12 @@ if(args.Contains("--live"))
     for(var i=0;i<prompts.Length;i++)
     {
         var watch=System.Diagnostics.Stopwatch.StartNew();
-        var generated=await agent.GenerateAsync(prompts[i],args.Contains("--text-designer")?OllamaClient.DefaultModel:DesignAgent.DefaultModel,args.Contains("--no-review")?null:DesignAgent.DefaultModel,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default);
+        var liveModel=args.Contains("--text-designer")?OllamaClient.DefaultModel:DesignAgent.DefaultModel;
+        var liveReviewer=args.Contains("--no-review")?null:DesignAgent.DefaultModel;
+        var liveRecording=new DesignRecording {Prompt=prompts[i],Model=liveModel,ReviewModel=liveReviewer};
+        DesignResult generated;
+        try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default,liveRecording);}
+        finally {liveRecording.TrySave("artifacts-design/live-recordings",out _,out _);}
         File.WriteAllText($"artifacts-design/design-{i+1}.json",JsonSerializer.Serialize(generated,BlockSpec.JsonOptions));
         File.WriteAllBytes($"artifacts-design/design-{i+1}.png",PlanRenderer.Png(generated.Block));
         Console.WriteLine($"LIVE {i+1}: {generated.Plan.Parts.Length} AI-designed parts, {generated.Block.Entities.Length} entities; {generated.Attempts} attempts; visual review={generated.VisuallyReviewed}; {watch.Elapsed.TotalSeconds:0.0}s");
