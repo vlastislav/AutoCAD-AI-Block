@@ -1,4 +1,6 @@
-# Block AI for AutoCAD 2026
+# AutoCAD-AI-Block
+
+Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a 2D plan, and insert it as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
