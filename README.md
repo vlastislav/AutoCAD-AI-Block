@@ -26,9 +26,28 @@ This machine's installed AutoCAD assemblies target .NET 8. Autodesk documents a 
 2. For a quick trial, open AutoCAD, run `NETLOAD`, and select `artifacts\BlockAI.bundle\Contents\Windows\BlockAI.dll`. Keep `BlockAI.Core.dll` beside it. If AutoCAD requests trust, review and trust this specific build folder in AutoCAD's Trusted Locations; keep secure loading enabled.
 3. Run `AIBLOCK`. Click **Load example king bed** to preview an offline example without an API key.
 4. Set **Drawing units** to match the current drawing, click **Insert into drawing**, then pick a point. Esc cancels. `U` undoes an insertion.
-5. For custom generation, enter an OpenAI API key and a model with Responses + Structured Outputs support, then click **Generate block**. The initial model field is `gpt-4.1-mini`; use a supported model your API account can access. Review dimensions and assumptions before inserting.
+5. For custom generation, use **Local AI — Ollama** (the default), click **Start local AI**, then **Check models**. Once your model is available, enter a description and click **Generate block**. Review dimensions and assumptions, then click **Insert into drawing** and choose a point.
+6. Alternatively select **OpenAI (paid API)** and enter your API key. This mode requires Responses + Structured Outputs support; its initial model is `gpt-4.1-mini`.
 
 For automatic loading, copy the whole `BlockAI.bundle` folder into `%APPDATA%\Autodesk\ApplicationPlugins` and restart AutoCAD. Installation is manual; the build script only writes inside this project.
+
+## Free local generation on D:
+
+The local provider uses Ollama at `127.0.0.1:11434` with `qwen2.5:7b` by default. Local inference has no API fees and needs no OpenAI key. Expect a large initial download, disk/RAM/GPU use, and potentially slower generation than cloud inference. Block quality still needs review.
+
+```powershell
+# Downloads official portable Ollama; verifies the published SHA256 before extracting.
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-ollama.ps1 -InstallRoot D:\Ollama
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Ollama\start-ollama.ps1
+# Wait a few seconds for the server to start, then download the model:
+D:\Ollama\app\ollama.exe pull qwen2.5:7b
+```
+
+Application: `D:\Ollama\app`; models: `D:\Ollama\models`; logs: `D:\Ollama\logs`; archive: `D:\Ollama\downloads`. On a fresh setup the installer creates a directory junction from `%USERPROFILE%\.ollama` to `D:\Ollama\config`, keeping actual configuration data on D:. Existing configuration is preserved without moving it. Windows itself may still use system caches or temporary files on C:.
+
+The launcher sets storage variables for its child process, disables Ollama cloud features, and binds only to loopback. It does not change global PATH, install a Windows service, or add a startup task. Click **Start local AI** after reboot. The panel's launcher expects `D:\Ollama\start-ollama.ps1`; custom installation locations can be started manually.
+
+**Check models** lists installed local models. A missing model must be downloaded using `ollama.exe pull`. The client does not download models or silently fall back to paid cloud generation. Geometry failing validation gets at most one local repair attempt. Cancel is available; generation has a ten-minute timeout.
 
 ## Behavior and limits
 
@@ -38,12 +57,14 @@ For automatic loading, copy the whole `BlockAI.bundle` folder into `%APPDATA%\Au
 - No 3D, dynamic-block parameters, arcs, hatches, text, dimension objects, DWG export, or manufacturing details yet. Wood is represented by linework, not a rendered material.
 - The offline example is fixed, clearly labeled, and does not interpret the prompt. It assumes a rounded 1930 × 2030 mm North American king mattress; specify exact dimensions for regional alternatives.
 - Validation limits geometry size, entity count, coordinates, and degenerate outlines. AI output is treated as data. No generated scripts or commands are executed.
-- Generation sends only your typed description and drafting instructions to OpenAI, with `store: false`. It does not upload drawing contents. Provider retention policies still apply. API usage may incur charges on your account, separate from ChatGPT subscriptions.
+- Local mode sends only your description and drafting instructions to Ollama on this PC; it does not send your API key. Cloud mode sends the description and instructions to OpenAI with `store: false`. Neither uploads drawing contents. OpenAI retention policies and API billing apply only to the OpenAI provider.
 - Keys are password-masked, held in process memory, and never written to project files. Optional: set `OPENAI_API_KEY` before starting AutoCAD. Do not commit keys. This local prototype is intended for your own key; a distributable commercial product should use an authenticated backend rather than embed a shared key.
 
 ## Validation
 
-`tests/BlockAI.Checks` checks dimensions, serialization, unit conversion, invalid geometry rejection, request construction, response parsing, and HTTP errors using a fake HTTP handler. It makes no paid API requests. A successful compilation verifies references to the installed AutoCAD API. Interactive loading, UCS placement, undo, palette docking, and real model output still require an AutoCAD smoke test.
+`tests/BlockAI.Checks` checks dimensions, serialization, unit conversion, invalid geometry rejection, both providers' requests/responses, local repair, cloud-model rejection, model discovery, and HTTP errors using fake HTTP handlers. It makes no paid API requests. Pass `--local-smoke` to run an actual local king-bed generation and save the validated result to `artifacts-next/local-bed-smoke.json`. A successful compilation verifies references to the installed AutoCAD API. Interactive loading, UCS placement, undo, and palette docking still require an AutoCAD smoke test.
+
+`tests/BlockAI.PanelChecks` is an optional Windows UI smoke test. It exercises the actual panel off-screen, with the AutoCAD insertion bridge stubbed. It checks provider defaults, per-provider model retention, key-field visibility, preview/insertion state, and live Ollama model discovery. Start Ollama first and create `artifacts-next` before running it; it saves `artifacts-next/panel-local-preview.png`.
 
 ## GitHub
 
@@ -53,3 +74,5 @@ Source, packaging manifest, build script and checks belong in Git. `.gitignore` 
 
 - [Autodesk managed .NET compatibility](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Customization/files/GUID-A6C680F2-DE2E-418A-A182-E4884073338A.htm)
 - [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)
+- [Ollama Windows portable setup and storage](https://docs.ollama.com/windows)
+- [Ollama structured output](https://docs.ollama.com/capabilities/structured-outputs)

@@ -1,14 +1,23 @@
 using BlockAI.Core;
 using System.Net.Http;
+using System.Diagnostics;
+using System.IO;
 
 namespace BlockAI.AutoCAD;
 
 internal sealed class PromptPanel : UserControl
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(3) };
+    private static readonly HttpClient LocalHttp = new(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
+        { Timeout = Timeout.InfiniteTimeSpan };
+    private readonly ComboBox provider = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly Label providerNote = new() { AutoSize = true };
+    private readonly Label modelLabel = new() { AutoSize = true };
+    private readonly Button startLocal = new() { Text = "Start local AI", Height = 28 };
+    private readonly Button checkLocal = new() { Text = "Check models", Height = 28 };
     private readonly TextBox prompt = new() { Multiline = true, Height = 82, MaxLength = 4000, Text = "A king size wooden bed plan" };
     private readonly TextBox apiKey = new() { UseSystemPasswordChar = true, PlaceholderText = "OpenAI API key (kept in memory only)" };
-    private readonly TextBox model = new() { Text = "gpt-4.1-mini" };
+    private readonly TextBox model = new() { Text = OllamaClient.DefaultModel };
     private readonly ComboBox units = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly Button generate = new() { Text = "Generate block", Height = 36 };
     private readonly Button demo = new() { Text = "Load example king bed", Height = 30 };
@@ -19,6 +28,9 @@ internal sealed class PromptPanel : UserControl
     private readonly BlockPreview preview = new() { Height = 220 };
     private BlockSpec? spec;
     private CancellationTokenSource? cancellation;
+    private bool IsLocal => provider.SelectedIndex == 0;
+    private string localModel = OllamaClient.DefaultModel;
+    private string openAiModel = "gpt-4.1-mini";
 
     public PromptPanel()
     {
@@ -36,13 +48,19 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("2D geometry from your description");
+        Label("v0.2 · 2D geometry from your description");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
-        Label("Custom generation sends this description to OpenAI.");
+        Label("Generation provider");
+        provider.Items.AddRange(["Local AI — Ollama (no API fees)", "OpenAI (paid API)"]);
+        provider.SelectedIndex = 0;
+        Add(provider);
+        Add(providerNote);
+        Add(startLocal);
+        Add(checkLocal);
         Add(apiKey);
         apiKey.Text = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? "";
-        Label("OpenAI model (API access and billing required)");
+        Add(modelLabel);
         Add(model);
         Add(generate);
         Add(cancel);
@@ -63,6 +81,48 @@ internal sealed class PromptPanel : UserControl
                 label.MaximumSize = new Size(width, 0);
         };
         Controls.Add(layout);
+        void UpdateProvider(bool savePrevious = false)
+        {
+            if (IsLocal) { if (savePrevious) openAiModel = model.Text; model.Text = localModel; }
+            else { if (savePrevious) localModel = model.Text; model.Text = openAiModel; }
+            apiKey.Visible = !IsLocal;
+            startLocal.Visible = checkLocal.Visible = IsLocal;
+            providerNote.Text = IsLocal
+                ? "Runs on this PC. No API key required. First generation can take a few minutes."
+                : "Sends your description to OpenAI. API access and billing required.";
+            modelLabel.Text = IsLocal ? "Downloaded Ollama model" : "OpenAI model";
+            status.Text = IsLocal ? "Start local AI, check models, then describe your block." : "Enter an API key to generate with OpenAI.";
+        }
+        provider.SelectedIndexChanged += (_, _) => UpdateProvider(true);
+        UpdateProvider();
+        startLocal.Click += (_, _) =>
+        {
+            try
+            {
+                const string launcher = @"D:\Ollama\start-ollama.ps1";
+                if (!File.Exists(launcher)) throw new FileNotFoundException("Install local AI first. Expected launcher: " + launcher);
+                Process.Start(new ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{launcher}\"")
+                    { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
+                status.Text = "Starting local AI. Wait a few seconds, then click Check models.";
+            }
+            catch (Exception ex) { status.Text = ex.Message; }
+        };
+        checkLocal.Click += async (_, _) =>
+        {
+            SetBusy(true);
+            cancel.Enabled = false;
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var models = await new OllamaClient(LocalHttp).ListModelsAsync(timeout.Token);
+                status.Text = models.Length == 0 ? "Ollama is running but has no local models. Download " + OllamaClient.DefaultModel + "."
+                    : "Available local models: " + string.Join(", ", models);
+                if (models.Length > 0 && !models.Contains(model.Text)) model.Text = models[0];
+            }
+            catch (OperationCanceledException) { status.Text = "Ollama did not respond. Start local AI and try again."; }
+            catch (Exception ex) { status.Text = ex.Message; }
+            finally { SetBusy(false); }
+        };
         generate.Click += async (_, _) => await GenerateAsync();
         cancel.Click += (_, _) => cancellation?.Cancel();
         demo.Click += (_, _) => ShowSpec(BlockSpec.DemoKingBed(), "Offline example ready. Check units, then insert.");
@@ -80,7 +140,7 @@ internal sealed class PromptPanel : UserControl
 
     private async Task GenerateAsync()
     {
-        if (string.IsNullOrWhiteSpace(apiKey.Text))
+        if (!IsLocal && string.IsNullOrWhiteSpace(apiKey.Text))
         {
             status.Text = "Enter an OpenAI API key above for AI generation, or click Load example king bed to try it offline.";
             apiKey.Focus();
@@ -91,11 +151,14 @@ internal sealed class PromptPanel : UserControl
         preview.Invalidate();
         details.Clear();
         SetBusy(true);
-        status.Text = "Generating geometry…";
-        cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var useLocal = IsLocal;
+        status.Text = useLocal ? "Generating on this PC… First run loads the model. You can cancel below." : "Generating geometry…";
+        cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(useLocal ? 10 : 3));
         try
         {
-            var generated = await new AiClient(Http).GenerateAsync(prompt.Text, apiKey.Text, model.Text, cancellation.Token);
+            var generated = useLocal
+                ? await new OllamaClient(LocalHttp).GenerateAsync(prompt.Text, model.Text, cancellation.Token)
+                : await new AiClient(Http).GenerateAsync(prompt.Text, apiKey.Text, model.Text, cancellation.Token);
             ShowSpec(generated, "Preview ready. Review dimensions, then click Insert into drawing and pick a point.");
         }
         catch (OperationCanceledException) { status.Text = "Generation canceled or timed out. You can try again."; }
@@ -115,6 +178,7 @@ internal sealed class PromptPanel : UserControl
     private void SetBusy(bool busy)
     {
         generate.Enabled = demo.Enabled = prompt.Enabled = apiKey.Enabled = model.Enabled = !busy;
+        provider.Enabled = startLocal.Enabled = checkLocal.Enabled = !busy;
         cancel.Enabled = busy;
         insert.Enabled = !busy && spec is not null;
     }
