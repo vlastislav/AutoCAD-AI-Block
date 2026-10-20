@@ -4,7 +4,9 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a 2D plan, and insert it as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
-## v0.4.1: autonomous design experiment
+## v0.4.2: autonomous design experiment
+
+v0.4.2 fixes repeated “exceeds the 0–1 design area” failures: reasonable coordinate overflow is fitted as a complete assembly to the requested dimensions. Individual parts are not clipped or moved separately. Nonfinite/pathological coordinates and construction errors still fail validation. Regression checks cover negative origins, oversized boxes, preserved joints/proportions and exact output size.
 
 Local generation now asks AI to compose a **part-based design**, not select a furniture category/template. The toolkit includes rectangles, rounded outlines, trapezoids, ellipses, custom polygons/paths, quadratic curves, inner outlines, alignment, repetition, and mirrored parts. The model selects roles, shapes, proportions and arrangement. Toolkit curves are sampled into editable CAD polylines.
 
@@ -18,15 +20,15 @@ The review sends a PNG rendered from the generated block, the typed request and 
 
 ### Install and test this build
 
-1. Close every AutoCAD window, reopen AutoCAD and `NETLOAD` the new DLL. For the current prepared build use `artifacts-v041\BlockAI.bundle\Contents\Windows\BlockAI.dll`, keeping `BlockAI.Core.dll` beside it.
-2. Run `AIBLOCK` and confirm the **v0.4.1** label. Use local model `qwen3.5:4b` for design/review.
+1. Close every AutoCAD window, reopen AutoCAD and `NETLOAD` the new DLL. For the current prepared build use `artifacts-v042\BlockAI.bundle\Contents\Windows\BlockAI.dll`, keeping `BlockAI.Core.dll` beside it.
+2. Run `AIBLOCK` and confirm the **v0.4.2** label. Use local model `qwen3.5:4b` for design/review.
 3. Generate, review the preview and size, select the actual drawing units, then click **Insert into drawing** and pick a point. Esc cancels placement.
 
 The insertion button now enters AutoCAD command context directly, focuses the drawing and reports success/cancellation/errors back to the palette. Finish any active AutoCAD command before inserting. `AIBLOCKINSERT` can retry the last insertion from the command line in the same drawing. The user confirmed insertion works in their AutoCAD session. Undo and non-default UCS behavior still need separate interactive checks; the off-screen UI tests stub the native bridge.
 
 Run `tests/BlockAI.DesignChecks` for construction/constraint/revision tests. Pass `--live --variations` for three real AI chair designs with rendered review; outputs are in `artifacts-design`. Add `--no-review` to test geometry-only generation. The build script runs the deterministic checks without paid API calls. `tests/BlockAI.PanelChecks` also exercises insertion success/cancel/error UI states.
 
-Latest local verification: 68 core checks, 40 design-loop checks and 12 panel checks passed. Three live chair variations completed construction and visual review in 20.6, 6.7 and 8.3 seconds respectively. Their geometry differed and the requested oval/tapered seats and four-slat count were represented. Manual preview inspection still found awkward backrest proportions; passing review is not evidence of architectural-quality output. These timings are observations on this machine, not guarantees.
+Local verification: v0.4.2 passed 68 core and 44 design-loop checks. The previous build also passed 12 panel checks; three live chair variations completed construction and visual review in 20.6, 6.7 and 8.3 seconds respectively. Their geometry differed and the requested oval/tapered seats and four-slat count were represented. Manual preview inspection still found awkward backrest proportions; passing review is not evidence of architectural-quality output. These timings are observations on this machine, not guarantees.
 
 Example: **A king size wooden bed plan, North American king mattress, simple headboard.**
 

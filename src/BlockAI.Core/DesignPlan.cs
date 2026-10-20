@@ -37,8 +37,8 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             if(noCushions&&role.Contains("seat")&&part.Inset>0) throw new InvalidDataException("No cushion means no inner seat pad/seam outline. Set seat inset=0.");
             if(noArms&&Regex.IsMatch(role,"armrest|^arm$|^arms$")) throw new InvalidDataException("The request forbids armrests.");
             double[] numbers=[part.X,part.Y,part.W,part.H,part.Detail,part.Gap,part.Inset];
-            if(numbers.Any(v=>!double.IsFinite(v))||part.X<0||part.Y<0||part.W<=0||part.H<=0||part.W>1||part.H>1||part.Detail<0||part.Detail>.45||part.Inset<0||part.Inset>.2||part.Gap<0||part.Gap>.2)
-                throw new InvalidDataException("Part boxes must be positive normalized coordinates within 0–1; detail <=0.45, inset/gap <=0.2.");
+            if(numbers.Any(v=>!double.IsFinite(v))||Math.Abs(part.X)>4||Math.Abs(part.Y)>4||part.W<=0||part.H<=0||part.W>4||part.H>4||part.Detail<0||part.Detail>.45||part.Inset<0||part.Inset>.2||part.Gap<0||part.Gap>.2)
+                throw new InvalidDataException("Part boxes need finite positions between -4 and 4 and positive sizes <=4; detail <=0.45, inset/gap <=0.2.");
             if(part.Count is <1 or >8||part.Repeat is not("none" or "row" or "column")||part.Align is not("none" or "center" or "left" or "right"))
                 throw new InvalidDataException("Invalid repetition/alignment. Use none/row/column and none/center/left/right.");
             if(part.Repeat=="none"&&part.Count!=1) throw new InvalidDataException("Non-repeated parts must have count=1.");
@@ -64,15 +64,15 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
                 var right=Math.Min(a.Points.Max(p=>p.X),b.Points.Max(p=>p.X))-part.W/2;
                 if(left>right)throw new InvalidDataException("Attachment anchors have no shared horizontal span wide enough for this connector.");
                 var center=right-left<2e-7?(left+right)/2:Math.Clamp(x+part.W/2,left+1e-7,right-1e-7);
-                double[] Crossings(Primitive anchor)=>Edges(anchor).Select(e=>Intersection(new(center,-1),new(center,2),e.A,e.B))
-                    .Where(t=>t is not null).Select(t=>-1+3*t!.Value).OrderBy(v=>v).ToArray();
+                double[] Crossings(Primitive anchor)=>Edges(anchor).Select(e=>Intersection(new(center,-16),new(center,16),e.A,e.B))
+                    .Where(t=>t is not null).Select(t=>-16+32*t!.Value).OrderBy(v=>v).ToArray();
                 var ac=Crossings(a);var bc=Crossings(b);
                 if(ac.Length==0||bc.Length==0)throw new InvalidDataException("The connector cannot intersect its requested anchors at this X position.");
                 var start=ac.Max();var end=bc.Min();
                 if(end<start)throw new InvalidDataException("Attachment 'to' must be behind 'from' (+Y) without overlapping its surface.");
-                x=center-part.W/2;y=Math.Max(0,start-.015);height=Math.Min(1,end+.015)-y;
+                x=center-part.W/2;y=start-.015;height=end+.015-y;
             }
-            if(x+part.W>1.000001||y+height>1.000001) throw new InvalidDataException(FormattableString.Invariant($"Part '{part.Role}' exceeds the 0–1 design area: x={x:0.###}, y={y:0.###}, w={part.W:0.###}, h={height:0.###}. At this position w must be <= {1-x:0.###}, h <= {1-y:0.###}. Correct THIS part's size or position."));
+            // Fit the complete assembly below; clipping or moving individual parts breaks joints.
             var cellW=part.Repeat=="row"?(part.W-part.Gap*(part.Count-1))/part.Count:part.W;
             var cellH=part.Repeat=="column"?(height-part.Gap*(part.Count-1))/part.Count:height;
             if(cellW<.002||cellH<.002) throw new InvalidDataException("Repeated parts have no space. Reduce count or gap.");
@@ -92,8 +92,8 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
                 {
                     void Unique(Primitive outline)
                     {
-                        if(outline.Points.Any(p=>p.X<-.000001||p.X>1.000001||p.Y<-.000001||p.Y>1.000001))
-                            throw new InvalidDataException($"Actual outline of '{part.Role}' extends outside the overall 0–1 design area. Move or resize that part/control points.");
+                        if(outline.Points.Any(p=>!double.IsFinite(p.X)||!double.IsFinite(p.Y)||Math.Abs(p.X)>16||Math.Abs(p.Y)>16))
+                            throw new InvalidDataException($"Actual outline of '{part.Role}' is nonfinite or exceeds the supported coordinate range (-16 to 16).");
                         var key=string.Join(";",outline.Points.Select(p=>FormattableString.Invariant($"{p.X:F6},{p.Y:F6}")).OrderBy(v=>v,StringComparer.Ordinal));
                         if(localOutlines.Add(key)) built.Add((role,outline));
                     }
@@ -278,7 +278,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     Tools: rectangle; rounded (detail=corner fraction .02..0.3); trapezoid (detail=top inset fraction);
     ellipse; path (open local points); polygon (closed local points); curve (3 local points for quadratic Bezier).
     points=[] unless using path/polygon/curve. Points are local to that part's box, normally between 0 and 1.
-    Curve control points may range from -1 to 2 to bow outside the local box, but the actual curve must remain within the overall design area.
+    Curve control points may range from -1 to 2 to bow outside the local box. Modest overflow beyond the overall 0..1 box is fitted as one assembly to the requested footprint, preserving connections.
     count=1, repeat=none normally. row/column divides the part box into count equally spaced items; gap is normalized overall spacing.
     mirror=true makes a reflected copy across overall x=0.5; use for paired supports, not centered seats.
     align=none uses x; center centers the whole box; left/right align it to the overall bounds.

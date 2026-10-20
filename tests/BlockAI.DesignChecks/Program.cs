@@ -36,6 +36,12 @@ Reject(()=> (plan with {Parts=[seat with {X=.7},back]}).Build(request),"out-of-b
 Reject(()=> (plan with {Parts=[seat with {Shape="script"},back]}).Build(request),"unsupported tools cannot execute code");
 Reject(()=> (plan with {Parts=[seat with {Count=8,Repeat="row",Gap=.2},back]}).Build(request),"impossible repetition rejected");
 Reject(()=> (plan with {Parts=[seat with {Shape="polygon",Points=[new(0,0),new(.5,0),new(1,0)]},back]}).Build(request),"zero-area polygons rejected");
+var overflow=plan with {Parts=[Part("surface","rectangle",-.2,0,1.4,.8),Part("rail","rectangle",-.2,.8,1.4,.4)]};
+var fitted=overflow.Build("panel 600 x 900 mm");
+Check(Math.Abs(fitted.Bounds().Width-600)<1e-6&&Math.Abs(fitted.Bounds().Height-900)<1e-6,"overflow assembly fitted to requested footprint");
+Check(Math.Abs(fitted.Entities[0].Points[2].Y-fitted.Entities[1].Points[0].Y)<1e-6,"fitting preserves shared edges without clipping");
+Check(Math.Abs(fitted.Entities[0].Points[2].Y-600)<1e-6,"fitting preserves relative part proportions");
+Reject(()=>(overflow with {Parts=[overflow.Parts[0] with {W=500},overflow.Parts[1]]}).Build("panel"),"pathological coordinate range rejected");
 var slats=back with {Shape="rectangle",Count=4,Repeat="row",Gap=.04,Detail=0};
 Check((plan with {Parts=[seat,slats,support]}).Build("panel 500 x 550 mm").Entities.Length==7,"repeat tool creates four spaced parts");
 Check((plan with {Parts=[seat,slats with {Mirror=true},support]}).Build("panel 500 x 550 mm").Entities.Length==7,"symmetric repeat plus mirror does not duplicate tool output");
