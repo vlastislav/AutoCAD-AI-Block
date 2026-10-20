@@ -48,7 +48,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.2.1 · 2D geometry from your description");
+        Label("v0.3 · AI-designed furniture plans");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -88,7 +88,7 @@ internal sealed class PromptPanel : UserControl
             apiKey.Visible = !IsLocal;
             startLocal.Visible = checkLocal.Visible = IsLocal;
             providerNote.Text = IsLocal
-                ? "Runs on this PC. No API key required. First generation can take a few minutes."
+                ? "AI sets furniture dimensions and style; adjustable geometry builds the plan. Other objects use experimental generation."
                 : "Sends your description to OpenAI. API access and billing required.";
             modelLabel.Text = IsLocal ? "Downloaded Ollama model" : "OpenAI model";
             status.Text = IsLocal ? "Start local AI, check models, then describe your block." : "Enter an API key to generate with OpenAI.";
@@ -152,12 +152,12 @@ internal sealed class PromptPanel : UserControl
         details.Clear();
         SetBusy(true);
         var useLocal = IsLocal;
-        status.Text = useLocal ? "Generating on this PC… First run loads the model. You can cancel below." : "Generating geometry…";
+        status.Text = useLocal ? "Interpreting your furniture request… Other objects may take longer." : "Generating geometry…";
         cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(useLocal ? 10 : 3));
         try
         {
             var generated = useLocal
-                ? await new OllamaClient(LocalHttp).GenerateAsync(prompt.Text, model.Text, cancellation.Token)
+                ? await new OllamaClient(LocalHttp).GenerateFurnitureAsync(prompt.Text, model.Text, cancellation.Token)
                 : await new AiClient(Http).GenerateAsync(prompt.Text, apiKey.Text, model.Text, cancellation.Token);
             ShowSpec(generated, "Preview ready. Review dimensions, then click Insert into drawing and pick a point.");
         }

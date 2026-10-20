@@ -103,6 +103,45 @@ foreach (var code in new[] { HttpStatusCode.NotFound, HttpStatusCode.InternalSer
 var offline = new OllamaClient(new HttpClient(new FakeHandler((_, _) => throw new HttpRequestException("Connection refused"))));
 try { await offline.ListModelsAsync(default); throw new Exception("Unavailable server accepted"); }
 catch (HttpRequestException ex) { Check(ex.Message.Contains("Start local AI"), "offline error explains how to start Ollama"); }
+var sofaDesign = new FurnitureDesign("sofa",2400,950,3,"modern","rectangular",[]);
+var sofa = sofaDesign.Build();
+Check(sofa.Bounds().Width == 2400 && sofa.Bounds().Height == 950, "sofa has exact overall dimensions");
+Check(sofa.Entities.Length == 9, "three-seat sofa has footprint, two arms, three seats and three back cushions");
+var cushionBounds = sofa.Entities.Skip(3).Where((_,i)=>i%2==0).Select(e => (MinX:e.Points.Min(p=>p.X),MaxX:e.Points.Max(p=>p.X),MinY:e.Points.Min(p=>p.Y),MaxY:e.Points.Max(p=>p.Y))).ToArray();
+Check(cushionBounds.Length==3 && cushionBounds[0].MaxX < cushionBounds[1].MinX && cushionBounds[1].MaxX < cushionBounds[2].MinX, "sofa seat cushions separated without overlap");
+Check(cushionBounds.All(b=>b.MinX>0 && b.MaxX<2400 && b.MinY>0 && b.MaxY<950), "sofa cushions stay inside footprint");
+foreach(var kind in new[]{"sofa","bed","chair","table","desk","cabinet"})
+{
+    var design = kind switch { "bed"=>new FurnitureDesign(kind,2030,2230,1,"modern","rectangular",[]), "chair"=>new(kind,850,850,1,"classic","rectangular",[]), _=>new(kind,1600,900,kind=="sofa"?2:1,"modern","rectangular",[]) };
+    var block = design.Build();
+    Check(block.Bounds().Width==design.Width && block.Bounds().Height==design.Depth, $"{kind} template preserves bounds");
+}
+var explicitSize = sofaDesign.ApplyExplicitDimensions("modern 2-seat sofa 2.1m x 90cm");
+Check(explicitSize.Width==2100 && explicitSize.Depth==900 && explicitSize.Seats==2, "explicit mixed units and seat count override AI guesses");
+Check(sofaDesign.ApplyExplicitDimensions("2400 x 950 modern sofa").Depth==950, "style word is not interpreted as unit");
+Check(sofaDesign.ApplyExplicitDimensions("sofa 84 by 36 inches").Width==2133.6, "shared imperial unit converted exactly");
+var bedDesign = new FurnitureDesign("bed",2030,2230,1,"modern","rectangular",[]);
+Check(bedDesign.ApplyExplicitDimensions("bed mattress 1930 x 2030 mm").Width==2030, "mattress dimensions receive frame allowance");
+Check(bedDesign.ApplyExplicitDimensions("bed overall 2030 x 2230 mm with mattress").Width==2030, "overall bed dimensions are not expanded");
+Reject(()=> (sofaDesign with {Width=1000,Seats=5}).Build(), "impossible seat width rejected");
+Reject(()=> (sofaDesign with {Width=double.NaN}).Build(), "nonfinite furniture dimensions rejected");
+var roundTable = new FurnitureDesign("table",1200,1200,1,"modern","round",[]).Build();
+Check(roundTable.Entities.Length==1 && roundTable.Entities[0].Radius==600, "round table uses correct diameter");
+var intentCalls = 0;
+var intentClient = new OllamaClient(new HttpClient(new FakeHandler(async(request,ct)=>
+{
+    intentCalls++;
+    using var requestJson=JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+    Check(requestJson.RootElement.GetProperty("format").GetProperty("properties").TryGetProperty("width",out _), "furniture request asks AI for parameters");
+    return new(HttpStatusCode.OK){Content=new StringContent(JsonSerializer.Serialize(new{done=true,response=JsonSerializer.Serialize(sofaDesign,BlockSpec.JsonOptions)}))};
+})));
+var designed = await intentClient.GenerateFurnitureAsync("3-seat sofa 2500 x 1000 mm","test",default);
+Check(intentCalls==1 && designed.Bounds().Width==2500 && designed.Entities.Length==9, "one AI call builds exact requested sofa dimensions");
+var fallbackCalls=0;
+var fallbackClient=new OllamaClient(new HttpClient(new FakeHandler((_,_)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+{Content=new StringContent(JsonSerializer.Serialize(new{done=true,response=++fallbackCalls==1 ? "{\"kind\":\"other\"}" : encoded}))}))));
+var fallback=await fallbackClient.GenerateFurnitureAsync("a bicycle","test",default);
+Check(fallbackCalls==2 && fallback.Assumptions[0].StartsWith("Experimental"), "unsupported object uses labeled free-form fallback");
 Console.WriteLine($"{passed} checks passed. No paid API calls made.");
 
 if (args.Contains("--local-smoke"))
@@ -111,11 +150,16 @@ if (args.Contains("--local-smoke"))
     var client = new OllamaClient(localHttp);
     Console.WriteLine("LIVE local models: " + string.Join(", ", await client.ListModelsAsync(default)));
     var started = System.Diagnostics.Stopwatch.StartNew();
-    var generated = await client.GenerateAsync("A king size wooden bed plan. North American king mattress 1930 by 2030 mm. Show frame, headboard and two pillows. Use fewer than 20 entities.", OllamaClient.DefaultModel, default);
-    var bounds = generated.Bounds();
-    Console.WriteLine($"LIVE generated {generated.Name}: {generated.Entities.Length} entities, {bounds.Width} x {bounds.Height} mm in {started.Elapsed.TotalSeconds:0.0}s");
     Directory.CreateDirectory("artifacts-next");
-    File.WriteAllText("artifacts-next/local-bed-smoke.json", JsonSerializer.Serialize(generated, BlockSpec.JsonOptions));
+    foreach(var item in new[]{(Name:"sofa",Prompt:"A modern 3-seat sofa, 2400 x 950 mm"),(Name:"bed",Prompt:"A king size wooden bed plan. Mattress 1930 x 2030 mm."),(Name:"table",Prompt:"A round dining table, diameter 1200 mm")})
+    {
+        started.Restart();
+        var generated=await client.GenerateFurnitureAsync(item.Prompt,OllamaClient.DefaultModel,default);
+        var bounds=generated.Bounds();
+        Console.WriteLine($"LIVE {item.Name}: {generated.Entities.Length} entities, {bounds.Width} x {bounds.Height} mm in {started.Elapsed.TotalSeconds:0.0}s");
+        Check(generated.Assumptions[0].StartsWith("Built from adjustable"), "live "+item.Name+" uses furniture generator");
+        File.WriteAllText($"artifacts-next/local-{item.Name}-smoke.json",JsonSerializer.Serialize(generated,BlockSpec.JsonOptions));
+    }
 }
 
 sealed class FakeHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler

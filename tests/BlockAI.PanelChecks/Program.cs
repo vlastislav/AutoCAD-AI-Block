@@ -46,6 +46,20 @@ internal static class Program
                 Field<Button>("checkLocal").PerformClick();
                 for (var i = 0; i < 100 && !Field<Button>("checkLocal").Enabled; i++) await Task.Delay(100);
                 Check(Field<Label>("status").Text.StartsWith("Available local models:") || Field<Label>("status").Text.Contains("has no local models"), "live Ollama discovery updates UI");
+                {
+                    var sofa = File.Exists("artifacts-next/local-sofa-smoke.json")
+                        ? BlockSpec.Parse(File.ReadAllText("artifacts-next/local-sofa-smoke.json"))
+                        : new FurnitureDesign("sofa",2400,950,3,"modern","rectangular",[]).Build();
+                    typeof(PromptPanel).GetMethod("ShowSpec", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(panel, [sofa, "Furniture generator: sofa ready for insertion."]);
+                    using var sofaImage = new Bitmap(panel.Width, panel.Height);
+                    panel.DrawToBitmap(sofaImage, panel.ClientRectangle);
+                    sofaImage.Save("artifacts-next/panel-generated-sofa.png");
+                    var preview = Field<BlockPreview>("preview");
+                    using var plan = new Bitmap(preview.Width,preview.Height);
+                    preview.DrawToBitmap(plan,preview.ClientRectangle);
+                    plan.Save("artifacts-next/generated-sofa-plan.png");
+                }
                 Console.WriteLine("Panel smoke passed (AutoCAD bridge stubbed). Screenshot: artifacts-next/panel-local-preview.png");
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); Environment.ExitCode = 1; }

@@ -6,6 +6,16 @@ Windows AutoCAD plugin prototype: describe an object, preview a 2D plan, and ins
 
 Example: **A king size wooden bed plan, North American king mattress, simple headboard.**
 
+## v0.3: AI interpretation with adjustable furniture geometry
+
+The default local workflow asks AI for the furniture category, dimensions, seat count and style. Drawing routines then build the plan with consistent parts and exact overall bounds. No web search or block hunting is involved.
+
+Supported single objects: straight sofas, armchairs, beds, rectangular/round tables, desks and cabinets. Try **A modern 3-seat sofa, 2400 x 950 mm**. Sofas have separate seat/back cushions and arms. Bed dimensions refer to the outside frame; an explicit **mattress 1930 x 2030 mm** receives a 100 mm width and 200 mm depth frame allowance. Round tables use equal width/depth for their diameter.
+
+Explicit dimension pairs (`2400 x 950 mm`, `2.4m by 95cm`, `84 x 36 inches`) override model size guesses. Without units, pairs are interpreted as millimeters. Modern, classic and minimal styles currently vary outline corner treatment, not ornamental detail. Simplified furniture plans do not represent exact manufacturer products, construction details, or materials.
+
+Objects outside these categories, multi-object compositions and unsupported shapes use clearly labeled experimental free-form generation. L-shaped sofas, armless seating and ornate designs do not yet have dependable furniture routines. AI can still misclassify a request or miss a feature; review the description, dimensions and preview.
+
 ## Build
 
 Requires full AutoCAD 2026 for Windows (not AutoCAD LT) and the .NET 8 SDK. The project references Autodesk assemblies from the local AutoCAD installation; Autodesk DLLs are not distributed with the plugin.
@@ -47,7 +57,7 @@ Application: `D:\Ollama\app`; models: `D:\Ollama\models`; logs: `D:\Ollama\logs`
 
 The launcher sets storage variables for its child process, disables Ollama cloud features, and binds only to loopback. It does not change global PATH, install a Windows service, or add a startup task. Click **Start local AI** after reboot. The panel's launcher expects `D:\Ollama\start-ollama.ps1`; custom installation locations can be started manually.
 
-Local requests use an 8192-token context and compact JSON, with a schema limit of 40 entities and 32 points per entity, to keep simple blocks practical on an 8 GB GPU.
+Furniture interpretation uses a small parameter response with a 4096-token context. Experimental free-form requests use an 8192-token context and compact JSON, with a schema limit of 40 entities and 32 points per entity.
 
 **Check models** lists installed local models. A missing model must be downloaded using `ollama.exe pull`. The client does not download models or silently fall back to paid cloud generation. Geometry failing validation gets at most one local repair attempt. Cancel is available; generation has a ten-minute timeout.
 
@@ -55,7 +65,7 @@ Local requests use an 8192-token context and compact JSON, with a schema limit o
 
 - Produces actual polylines and circles inside a unique block definition, with layer 0 and ByBlock colors. Blocks are stored in the drawing and can be edited with AutoCAD's block editor.
 - Geometry is designed in millimeters, then scaled to the explicitly selected drawing units. It inserts on the current UCS XY plane, in the current drawing space and current layer.
-- Supports arbitrary prompts within the simple 2D geometry vocabulary. Recognition and dimensional accuracy depend on model output. This is conceptual drafting geometry; review it before production use.
+- Local furniture routines preserve the dimensions and seat count passed to them; explicit dimension pairs and numeric seat counts are read directly from the prompt. Other interpretation depends on the model. Free-form geometry remains experimental. Review conceptual drafting geometry before production use.
 - No 3D, dynamic-block parameters, arcs, hatches, text, dimension objects, DWG export, or manufacturing details yet. Wood is represented by linework, not a rendered material.
 - The offline example is fixed, clearly labeled, and does not interpret the prompt. It assumes a rounded 1930 × 2030 mm North American king mattress; specify exact dimensions for regional alternatives.
 - Validation limits geometry size, entity count, coordinates, and degenerate outlines. AI output is treated as data. No generated scripts or commands are executed.
@@ -64,11 +74,13 @@ Local requests use an 8192-token context and compact JSON, with a schema limit o
 
 ## Validation
 
-`tests/BlockAI.Checks` checks dimensions, serialization, unit conversion, invalid geometry rejection, both providers' requests/responses, local repair, cloud-model rejection, model discovery, and HTTP errors using fake HTTP handlers. It makes no paid API requests. Pass `--local-smoke` to run an actual local king-bed generation and save the validated result to `artifacts-next/local-bed-smoke.json`. A successful compilation verifies references to the installed AutoCAD API. Interactive loading, UCS placement, undo, and palette docking still require an AutoCAD smoke test.
+`tests/BlockAI.Checks` checks dimensions, sofa cushion separation/containment, all furniture routines, explicit unit conversion, mattress allowances, impossible seat counts, parameter requests, experimental fallback, geometry validation, both providers, local repair, model discovery and HTTP errors. It makes no paid API requests. Pass `--local-smoke` to run actual local sofa, bed and round-table requests and save geometry to `artifacts-next/local-*-smoke.json`. A successful compilation verifies references to the installed AutoCAD API. Interactive loading, UCS placement, undo, and palette docking still require an AutoCAD smoke test.
 
 `tests/BlockAI.PanelChecks` is an optional Windows UI smoke test. It exercises the actual panel off-screen, with the AutoCAD insertion bridge stubbed. It checks provider defaults, per-provider model retention, key-field visibility, preview/insertion state, and live Ollama model discovery. Start Ollama first and create `artifacts-next` before running it; it saves `artifacts-next/panel-local-preview.png`.
 
-A live local bed test completed with parseable, validated geometry, but its dimensions and visual layout did not fully match the request. The current validator checks geometry integrity, not furniture recognition or compliance with the requested dimensions. Web reference search, CAD catalog import, image tracing, and reliable parametric furniture generation are not implemented yet.
+The earlier free-form workflow produced poor furniture proportions, motivating the v0.3 furniture routines. Web reference search, CAD catalog import and image tracing are not implemented.
+
+Live v0.3 checks on the local RTX 3070 with the model warm and queue clear completed a 2400 × 950 mm three-seat sofa in 1.1 s, a king bed in 1.1 s and a 1200 mm round table in 0.8 s. First loading and other queued requests increase elapsed time; these are measurements, not latency guarantees.
 
 ## GitHub
 

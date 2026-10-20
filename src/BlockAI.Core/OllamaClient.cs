@@ -69,6 +69,37 @@ public sealed class OllamaClient(HttpClient http)
         throw new InvalidOperationException("Generation failed.");
     }
 
+    public async Task<BlockSpec> GenerateFurnitureAsync(string prompt, string model, CancellationToken cancellation)
+    {
+        if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > 4000)
+            throw new ArgumentException("Describe your block in 1–4000 characters.");
+        if (string.IsNullOrWhiteSpace(model) || model.Trim().EndsWith(":cloud", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Select a downloaded local Ollama model.");
+        using var schema = JsonDocument.Parse(FurnitureDesign.Schema);
+        var body = new
+        {
+            model = model.Trim(), prompt, system = FurnitureDesign.Instructions,
+            format = schema.RootElement, stream = false, keep_alive = "5m",
+            options = new { temperature = 0, num_ctx = 4096, num_predict = 768 }
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint + "/api/generate")
+        { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
+        using var json = await SendAsync(request, cancellation);
+        var root = json.RootElement;
+        if (!root.TryGetProperty("done", out var done) || !done.GetBoolean() ||
+            (root.TryGetProperty("done_reason", out var reason) && reason.GetString() == "length"))
+            throw new InvalidDataException("Furniture interpretation did not finish. Try a shorter description.");
+        var design = JsonSerializer.Deserialize<FurnitureDesign>(root.GetProperty("response").GetString()!, BlockSpec.JsonOptions)
+            ?? throw new InvalidDataException("No furniture parameters returned.");
+        if (design.Kind == "other")
+        {
+            var freeform = await GenerateAsync(prompt, model, cancellation);
+            return freeform with { Assumptions = new[] { "Experimental free-form geometry: this request is outside the supported furniture designs. Review its appearance and dimensions." }
+                .Concat(freeform.Assumptions).Take(20).ToArray() };
+        }
+        return design.ApplyExplicitDimensions(prompt).Build();
+    }
+
     private async Task<JsonDocument> SendAsync(HttpRequestMessage request, CancellationToken cancellation)
     {
         HttpResponseMessage response;
