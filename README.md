@@ -4,11 +4,35 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a 2D plan, and insert it as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
+## v0.4.1: autonomous design experiment
+
+Local generation now asks AI to compose a **part-based design**, not select a furniture category/template. The toolkit includes rectangles, rounded outlines, trapezoids, ellipses, custom polygons/paths, quadratic curves, inner outlines, alignment, repetition, and mirrored parts. The model selects roles, shapes, proportions and arrangement. Toolkit curves are sampled into editable CAD polylines.
+
+Try **Dining chair, no cushion, 500 x 550 mm**, then request an oval seat, curved backrest, or four back slats. The engine fits the overall footprint to explicit dimension pairs, checks finite/bounded geometry, duplicates, chair seat/back presence, overlap, actual outline contact, and declared forbidden cushions/arms. A connector can name `from`/`to` anchor roles; the engine computes its placement against actual outlines rather than relying on guessed coordinates. Support edges hidden underneath the seat/back are clipped. It does not prove physical construction, hidden details or visual recognition. Negative-feature checks inspect part roles and seat insets, so a mislabeled feature can evade them.
+
+One annotated worked plan is supplied in the prompt to teach normalized coordinates and attachment semantics. This is in-context guidance, not fine-tuning or a block selected by category. The model still chooses all parts and tool arguments. Its designs may remain simple, incorrect, or fail all three attempts. Do not treat this as a finished autonomous furniture designer.
+
+The default model is `qwen3.5:4b`. With **Review the preview with vision AI** enabled, the rendered plan is sent to the selected local review model. Feedback or geometric errors trigger a revised plan, with at most three design attempts. A design that still fails is not offered for insertion. There is no silent template fallback. Visual review is subjective and can approve a poor design or reject a reasonable one. Uncheck it for faster geometry-only experiments; the result explicitly records that visual review was disabled.
+
+The review sends a PNG rendered from the generated block, the typed request and its generated description to localhost only. It does not capture the drawing or screen. Cloud/OpenAI mode remains the older direct-geometry workflow and does not use this local loop.
+
+### Install and test this build
+
+1. Close every AutoCAD window, reopen AutoCAD and `NETLOAD` the new DLL. For the current prepared build use `artifacts-v041\BlockAI.bundle\Contents\Windows\BlockAI.dll`, keeping `BlockAI.Core.dll` beside it.
+2. Run `AIBLOCK` and confirm the **v0.4.1** label. Use local model `qwen3.5:4b` for design/review.
+3. Generate, review the preview and size, select the actual drawing units, then click **Insert into drawing** and pick a point. Esc cancels placement.
+
+The insertion button now enters AutoCAD command context directly, focuses the drawing and reports success/cancellation/errors back to the palette. Finish any active AutoCAD command before inserting. `AIBLOCKINSERT` can retry the last insertion from the command line in the same drawing. The user confirmed insertion works in their AutoCAD session. Undo and non-default UCS behavior still need separate interactive checks; the off-screen UI tests stub the native bridge.
+
+Run `tests/BlockAI.DesignChecks` for construction/constraint/revision tests. Pass `--live --variations` for three real AI chair designs with rendered review; outputs are in `artifacts-design`. Add `--no-review` to test geometry-only generation. The build script runs the deterministic checks without paid API calls. `tests/BlockAI.PanelChecks` also exercises insertion success/cancel/error UI states.
+
+Latest local verification: 68 core checks, 40 design-loop checks and 12 panel checks passed. Three live chair variations completed construction and visual review in 20.6, 6.7 and 8.3 seconds respectively. Their geometry differed and the requested oval/tapered seats and four-slat count were represented. Manual preview inspection still found awkward backrest proportions; passing review is not evidence of architectural-quality output. These timings are observations on this machine, not guarantees.
+
 Example: **A king size wooden bed plan, North American king mattress, simple headboard.**
 
-## v0.3: AI interpretation with adjustable furniture geometry
+## Earlier v0.3 workflow (retained for regression checks)
 
-The default local workflow asks AI for the furniture category, dimensions, seat count and style. Drawing routines then build the plan with consistent parts and exact overall bounds. No web search or block hunting is involved.
+The earlier local workflow asked AI for the furniture category, dimensions, seat count and style. Drawing routines then built the plan with consistent parts and exact overall bounds. It remains in the source for regression checks, but is not the v0.4 palette generation path.
 
 Supported single objects: straight sofas, armchairs, beds, rectangular/round tables, desks and cabinets. Try **A modern 3-seat sofa, 2400 x 950 mm**. Sofas have separate seat/back cushions and arms. Bed dimensions refer to the outside frame; an explicit **mattress 1930 x 2030 mm** receives a 100 mm width and 200 mm depth frame allowance. Round tables use equal width/depth for their diameter.
 
@@ -43,7 +67,7 @@ For automatic loading, copy the whole `BlockAI.bundle` folder into `%APPDATA%\Au
 
 ## Free local generation on D:
 
-The local provider uses Ollama at `127.0.0.1:11434` with `qwen2.5:7b` by default. Local inference has no API fees and needs no OpenAI key. Expect a large initial download, disk/RAM/GPU use, and potentially slower generation than cloud inference. Block quality still needs review.
+The local provider uses Ollama at `127.0.0.1:11434` with `qwen3.5:4b` by default for design and vision review. The older `qwen2.5:7b` remains usable as a text-only designer with a separate vision review model. Local inference has no API fees and needs no OpenAI key. Expect a large initial download, disk/RAM/GPU use, and slower generation than the old parameter/template workflow. Block quality still needs review.
 
 ```powershell
 # Downloads official portable Ollama; verifies the published SHA256 before extracting.
@@ -51,21 +75,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-ollama.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File D:\Ollama\start-ollama.ps1
 # Wait a few seconds for the server to start, then download the model:
 D:\Ollama\app\ollama.exe pull qwen2.5:7b
+# v0.4 design + vision review model:
+D:\Ollama\app\ollama.exe pull qwen3.5:4b
 ```
 
 Application: `D:\Ollama\app`; models: `D:\Ollama\models`; logs: `D:\Ollama\logs`; archive: `D:\Ollama\downloads`. On a fresh setup the installer creates a directory junction from `%USERPROFILE%\.ollama` to `D:\Ollama\config`, keeping actual configuration data on D:. Existing configuration is preserved without moving it. Windows itself may still use system caches or temporary files on C:.
 
 The launcher sets storage variables for its child process, disables Ollama cloud features, and binds only to loopback. It does not change global PATH, install a Windows service, or add a startup task. Click **Start local AI** after reboot. The panel's launcher expects `D:\Ollama\start-ollama.ps1`; custom installation locations can be started manually.
 
-Furniture interpretation uses a small parameter response with a 4096-token context. Experimental free-form requests use an 8192-token context and compact JSON, with a schema limit of 40 entities and 32 points per entity.
+The design loop uses an 8192-token context and a bounded part-based response. It uses Ollama's chat API, with the toolkit contract also included in the user message for models whose installed prompt template ignores system messages. The legacy template and direct-geometry clients remain in the source for regression comparisons.
 
-**Check models** lists installed local models. A missing model must be downloaded using `ollama.exe pull`. The client does not download models or silently fall back to paid cloud generation. Geometry failing validation gets at most one local repair attempt. Cancel is available; generation has a ten-minute timeout.
+**Check models** lists installed local models. A missing model must be downloaded using `ollama.exe pull`. The client does not download models or silently fall back to paid cloud generation. The design loop allows at most three design attempts. Cancel is available; generation has a ten-minute timeout.
 
 ## Behavior and limits
 
 - Produces actual polylines and circles inside a unique block definition, with layer 0 and ByBlock colors. Blocks are stored in the drawing and can be edited with AutoCAD's block editor.
 - Geometry is designed in millimeters, then scaled to the explicitly selected drawing units. It inserts on the current UCS XY plane, in the current drawing space and current layer.
-- Local furniture routines preserve the dimensions and seat count passed to them; explicit dimension pairs and numeric seat counts are read directly from the prompt. Other interpretation depends on the model. Free-form geometry remains experimental. Review conceptual drafting geometry before production use.
+- The current local design loop preserves the explicit overall dimension pair by fitting the assembled footprint. Parts, proportions and requested details depend on model output and selected checks. The result remains conceptual drafting geometry; review it before production use.
 - No 3D, dynamic-block parameters, arcs, hatches, text, dimension objects, DWG export, or manufacturing details yet. Wood is represented by linework, not a rendered material.
 - The offline example is fixed, clearly labeled, and does not interpret the prompt. It assumes a rounded 1930 × 2030 mm North American king mattress; specify exact dimensions for regional alternatives.
 - Validation limits geometry size, entity count, coordinates, and degenerate outlines. AI output is treated as data. No generated scripts or commands are executed.

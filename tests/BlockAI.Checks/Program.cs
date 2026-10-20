@@ -142,6 +142,20 @@ var fallbackClient=new OllamaClient(new HttpClient(new FakeHandler((_,_)=>Task.F
 {Content=new StringContent(JsonSerializer.Serialize(new{done=true,response=++fallbackCalls==1 ? "{\"kind\":\"other\"}" : encoded}))}))));
 var fallback=await fallbackClient.GenerateFurnitureAsync("a bicycle","test",default);
 Check(fallbackCalls==2 && fallback.Assumptions[0].StartsWith("Experimental"), "unsupported object uses labeled free-form fallback");
+var plainChair = sofaDesign.ApplyChairConstraints("dining chair no cushion");
+Check(plainChair.Kind=="dining_chair" && !plainChair.Cushioned && !plainChair.Arms && plainChair.Width==500 && plainChair.Depth==550,"dining chair request corrects sofa classification and removes upholstery");
+var diningBlock=plainChair.Build();
+Check(diningBlock.Entities.Length==4 && diningBlock.Bounds().Width==500 && diningBlock.Bounds().Height==550,"plain dining chair has tapered seat, back rail and two supports");
+Check((plainChair with {Cushioned=true}).Build().Entities.Length==5,"dining seat pad added only when requested");
+Check(plainChair.ApplyExplicitDimensions("dining chair no cushion 450 x 520 mm").Build().Bounds().Width==450,"explicit chair dimensions retained");
+var office=sofaDesign.ApplyChairConstraints("office chair without cushions and no arms");
+Check(office.Kind=="office_chair" && !office.Cushioned && !office.Arms,"office chair type and negative constraints honored");
+var officeBlock=office.Build();
+Check(officeBlock.Entities.Count(e=>e.Kind=="circle")==5,"office chair has five casters rather than sofa cushions");
+Check(officeBlock.Bounds().Width==680 && officeBlock.Bounds().Height==680,"office footprint retains exact specified size");
+Check(sofaDesign.ApplyChairConstraints("lounge chair").Kind=="lounge_chair","lounge chair is separate from dining chair");
+Check(sofaDesign.ApplyChairConstraints("a table and dining chair").Kind=="sofa","multi-object classification is not replaced by a single chair");
+Check(plainChair.ApplyChairConstraints("dining chair slatted back").Build().Entities.Length==8,"slatted back adds distinct detail");
 Console.WriteLine($"{passed} checks passed. No paid API calls made.");
 
 if (args.Contains("--local-smoke"))
@@ -151,7 +165,10 @@ if (args.Contains("--local-smoke"))
     Console.WriteLine("LIVE local models: " + string.Join(", ", await client.ListModelsAsync(default)));
     var started = System.Diagnostics.Stopwatch.StartNew();
     Directory.CreateDirectory("artifacts-next");
-    foreach(var item in new[]{(Name:"sofa",Prompt:"A modern 3-seat sofa, 2400 x 950 mm"),(Name:"bed",Prompt:"A king size wooden bed plan. Mattress 1930 x 2030 mm."),(Name:"table",Prompt:"A round dining table, diameter 1200 mm")})
+    var liveItems=args.Contains("--chairs")
+        ? new[]{(Name:"dining-chair",Prompt:"dining chair no cushion"),(Name:"office-chair",Prompt:"office chair no cushion"),(Name:"lounge-chair",Prompt:"modern lounge chair")}
+        : new[]{(Name:"sofa",Prompt:"A modern 3-seat sofa, 2400 x 950 mm"),(Name:"bed",Prompt:"A king size wooden bed plan. Mattress 1930 x 2030 mm."),(Name:"table",Prompt:"A round dining table, diameter 1200 mm")};
+    foreach(var item in liveItems)
     {
         started.Restart();
         var generated=await client.GenerateFurnitureAsync(item.Prompt,OllamaClient.DefaultModel,default);

@@ -14,7 +14,8 @@ namespace BlockAI.AutoCAD;
 public class Plugin
 {
     private static PaletteSet? palette;
-    private static PendingInsert? pending;
+    private static PendingInsert? lastInsertion;
+    private static bool inserting;
     private sealed record PendingInsert(Document Document, BlockSpec Spec, double Scale);
 
     [CommandMethod("AIBLOCK", CommandFlags.Modal)]
@@ -33,27 +34,55 @@ public class Plugin
         palette.Visible = true;
     }
 
-    internal static void QueueInsert(BlockSpec spec, string units)
+    internal static async Task<bool> InsertAsync(BlockSpec spec, string units)
     {
         var doc = AcApp.DocumentManager.MdiActiveDocument ?? throw new InvalidOperationException("Open a drawing first.");
-        if (pending is not null) throw new InvalidOperationException("An insertion is already waiting. Complete or cancel it in AutoCAD.");
+        if (inserting) throw new InvalidOperationException("Finish or cancel the active insertion first.");
+        if (!string.IsNullOrEmpty(doc.CommandInProgress)) throw new InvalidOperationException("Press Esc to finish the current AutoCAD command, then click Insert again.");
         spec.Validate();
-        pending = new(doc, spec, BlockSpec.MillimetersToDrawingUnits(units));
-        try { doc.SendStringToExecute("AIBLOCKINSERT ", true, false, false); }
-        catch { pending = null; throw; }
+        var job=new PendingInsert(doc,spec,BlockSpec.MillimetersToDrawingUnits(units));
+        lastInsertion=job;
+        inserting=true;
+        System.Exception? failure=null;
+        var inserted=false;
+        try
+        {
+            await AcApp.DocumentManager.ExecuteInCommandContextAsync(_=>
+            {
+                // Never let an exception escape this native command-context callback.
+                try
+                {
+                    if(AcApp.DocumentManager.MdiActiveDocument!=doc) throw new InvalidOperationException("The active drawing changed. Click Insert again in the intended drawing.");
+                    doc.Window.Focus();
+                    inserted=InsertGeometry(job);
+                }
+                catch(System.Exception ex) {failure=ex;}
+                return Task.CompletedTask;
+            },null);
+            if(failure is not null) throw new InvalidOperationException(failure.Message,failure);
+            return inserted;
+        }
+        finally {inserting=false;}
     }
 
     [CommandMethod("AIBLOCKINSERT", CommandFlags.Modal)]
     public void Insert()
     {
-        var job = pending;
-        pending = null;
+        var job = lastInsertion;
         var doc = AcApp.DocumentManager.MdiActiveDocument;
-        if (job is null || doc is null || job.Document != doc) return;
+        if (job is null || doc is null || job.Document != doc)
+        {doc?.Editor.WriteMessage("\nGenerate a preview and use Insert into drawing first.\n");return;}
+        try {InsertGeometry(job);}
+        catch(System.Exception ex) {doc.Editor.WriteMessage($"\nBlock AI insertion failed: {ex.Message}\n");}
+    }
+
+    private static bool InsertGeometry(PendingInsert job)
+    {
+        var doc=job.Document;
         try
         {
             var point = doc.Editor.GetPoint("\nChoose block insertion point (Esc to cancel): ");
-            if (point.Status != PromptStatus.OK) return;
+            if (point.Status != PromptStatus.OK) return false;
             using var transaction = doc.Database.TransactionManager.StartTransaction();
             var table = (BlockTable)transaction.GetObject(doc.Database.BlockTableId, OpenMode.ForWrite);
             var safeName = new string(job.Spec.Name.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_').ToArray());
@@ -88,7 +117,8 @@ public class Plugin
             transaction.AddNewlyCreatedDBObject(reference, true);
             transaction.Commit();
             doc.Editor.WriteMessage($"\nInserted {job.Spec.Name}. Use U to undo.\n");
+            return true;
         }
-        catch (System.Exception ex) { doc.Editor.WriteMessage($"\nBlock AI: {ex.Message}\n"); }
+        catch (System.Exception ex) {doc.Editor.WriteMessage($"\nBlock AI: {ex.Message}\n");throw;}
     }
 }

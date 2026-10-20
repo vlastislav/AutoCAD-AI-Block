@@ -7,7 +7,10 @@ namespace BlockAI.AutoCAD;
 internal static class Plugin
 {
     internal static BlockSpec? Inserted;
-    internal static void QueueInsert(BlockSpec spec, string units) { Inserted = spec; }
+    internal static bool NextResult=true;
+    internal static Exception? Failure;
+    internal static Task<bool> InsertAsync(BlockSpec spec, string units)
+    {if(Failure is not null)return Task.FromException<bool>(Failure);Inserted=spec;return Task.FromResult(NextResult);}
 }
 
 internal static class Program
@@ -27,7 +30,7 @@ internal static class Program
             try
             {
                 Check(Field<ComboBox>("provider").SelectedIndex == 0, "local provider default");
-                Check(Field<TextBox>("model").Text == OllamaClient.DefaultModel, "local model default");
+                Check(Field<TextBox>("model").Text == DesignAgent.DefaultModel, "local model default");
                 Check(!Field<TextBox>("apiKey").Visible, "no key field in local mode");
                 Field<TextBox>("model").Text = "custom:local";
                 Field<ComboBox>("provider").SelectedIndex = 1;
@@ -40,6 +43,14 @@ internal static class Program
                 Check(Field<Button>("insert").Enabled, "preview enables insertion");
                 Field<Button>("insert").PerformClick();
                 Check(Plugin.Inserted is not null, "insert passes validated geometry to AutoCAD bridge");
+                Check(Field<Label>("status").Text.StartsWith("Block inserted")&&Field<Button>("insert").Enabled,"insertion success reported and button reusable");
+                Plugin.NextResult=false;
+                Field<Button>("insert").PerformClick();
+                Check(Field<Label>("status").Text.Contains("canceled")&&Field<Button>("insert").Enabled,"canceled insertion can be retried");
+                Plugin.Failure=new InvalidOperationException("Drawing is busy");
+                Field<Button>("insert").PerformClick();
+                Check(Field<Label>("status").Text.Contains("Drawing is busy")&&Field<Button>("insert").Enabled,"insertion error visible and button reusable");
+                Plugin.Failure=null;Plugin.NextResult=true;
                 using var image = new Bitmap(panel.Width, panel.Height);
                 panel.DrawToBitmap(image, panel.ClientRectangle);
                 image.Save("artifacts-next/panel-local-preview.png");

@@ -3,5 +3,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/BlockAI.Core/BlockAI.Core.csproj" />
     <Compile Include="../../src/BlockAI.AutoCAD/PromptPanel.cs" Link="PromptPanel.cs" />
+    <Compile Include="../../src/BlockAI.AutoCAD/PlanRenderer.cs" Link="PlanRenderer.cs" />
   </ItemGroup>
 </Project>

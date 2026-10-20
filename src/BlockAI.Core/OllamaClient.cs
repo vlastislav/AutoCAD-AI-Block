@@ -91,6 +91,7 @@ public sealed class OllamaClient(HttpClient http)
             throw new InvalidDataException("Furniture interpretation did not finish. Try a shorter description.");
         var design = JsonSerializer.Deserialize<FurnitureDesign>(root.GetProperty("response").GetString()!, BlockSpec.JsonOptions)
             ?? throw new InvalidDataException("No furniture parameters returned.");
+        design = design.ApplyChairConstraints(prompt);
         if (design.Kind == "other")
         {
             var freeform = await GenerateAsync(prompt, model, cancellation);
@@ -98,6 +99,32 @@ public sealed class OllamaClient(HttpClient http)
                 .Concat(freeform.Assumptions).Take(20).ToArray() };
         }
         return design.ApplyExplicitDimensions(prompt).Build();
+    }
+
+    internal async Task<string> ToolJsonAsync(string model,string system,string input,string schemaText,byte[]? image,CancellationToken cancellation,bool reasoning=false)
+    {
+        if(string.IsNullOrWhiteSpace(model)||model.EndsWith(":cloud",StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Select a local model.");
+        using var schema=JsonDocument.Parse(schemaText);
+        // Some portable-model templates forward only the user prompt. Include the toolkit
+        // contract in that message too, so system-message support is not a hidden dependency.
+        var userMessage=new Dictionary<string,object?>{["role"]="user",["content"]=system+"\n\nUSER REQUEST AND FEEDBACK:\n"+input};
+        if(image is not null) userMessage["images"]=new[]{Convert.ToBase64String(image)};
+        var body=new Dictionary<string,object?>
+        {
+            ["model"]=model.Trim(),["messages"]=new object[]{new {role="system",content=system},userMessage},["format"]=schema.RootElement,
+            ["stream"]=false,["keep_alive"]="5m",["options"]=new {temperature=0.2,num_ctx=8192,num_predict=reasoning?8192:4096}
+        };
+        if(model.StartsWith("qwen3",StringComparison.OrdinalIgnoreCase)) body["think"]=reasoning;
+        using var request=new HttpRequestMessage(HttpMethod.Post,Endpoint+"/api/chat")
+            {Content=new StringContent(JsonSerializer.Serialize(body),Encoding.UTF8,"application/json")};
+        using var json=await SendAsync(request,cancellation);
+        var root=json.RootElement;
+        if(!root.TryGetProperty("done",out var done)||!done.GetBoolean()||
+            (root.TryGetProperty("done_reason",out var reason)&&reason.GetString()=="length"))
+            throw new InvalidDataException("Model output was incomplete. Request fewer parts or a simpler design.");
+        return (root.TryGetProperty("message",out var message)?message.GetProperty("content").GetString():root.GetProperty("response").GetString())
+            ??throw new InvalidDataException("The model returned no design.");
     }
 
     private async Task<JsonDocument> SendAsync(HttpRequestMessage request, CancellationToken cancellation)

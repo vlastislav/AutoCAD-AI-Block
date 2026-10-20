@@ -15,9 +15,11 @@ internal sealed class PromptPanel : UserControl
     private readonly Label modelLabel = new() { AutoSize = true };
     private readonly Button startLocal = new() { Text = "Start local AI", Height = 28 };
     private readonly Button checkLocal = new() { Text = "Check models", Height = 28 };
-    private readonly TextBox prompt = new() { Multiline = true, Height = 82, MaxLength = 4000, Text = "A king size wooden bed plan" };
+    private readonly TextBox prompt = new() { Multiline = true, Height = 82, MaxLength = 4000, Text = "Dining chair, no cushion, 500 x 550 mm" };
     private readonly TextBox apiKey = new() { UseSystemPasswordChar = true, PlaceholderText = "OpenAI API key (kept in memory only)" };
-    private readonly TextBox model = new() { Text = OllamaClient.DefaultModel };
+    private readonly TextBox model = new() { Text = DesignAgent.DefaultModel };
+    private readonly CheckBox visualReview = new() {Text="Review the preview with vision AI (slower)",Checked=true,AutoSize=true};
+    private readonly TextBox reviewModel = new() {Text=DesignAgent.DefaultModel};
     private readonly ComboBox units = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly Button generate = new() { Text = "Generate block", Height = 36 };
     private readonly Button demo = new() { Text = "Load example king bed", Height = 30 };
@@ -29,7 +31,7 @@ internal sealed class PromptPanel : UserControl
     private BlockSpec? spec;
     private CancellationTokenSource? cancellation;
     private bool IsLocal => provider.SelectedIndex == 0;
-    private string localModel = OllamaClient.DefaultModel;
+    private string localModel = DesignAgent.DefaultModel;
     private string openAiModel = "gpt-4.1-mini";
 
     public PromptPanel()
@@ -48,7 +50,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.3 · AI-designed furniture plans");
+        Label("v0.4.1 · Design, connect, check and revise");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -62,6 +64,8 @@ internal sealed class PromptPanel : UserControl
         apiKey.Text = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? "";
         Add(modelLabel);
         Add(model);
+        Add(visualReview);
+        Add(reviewModel);
         Add(generate);
         Add(cancel);
         Add(status);
@@ -86,9 +90,10 @@ internal sealed class PromptPanel : UserControl
             if (IsLocal) { if (savePrevious) openAiModel = model.Text; model.Text = localModel; }
             else { if (savePrevious) localModel = model.Text; model.Text = openAiModel; }
             apiKey.Visible = !IsLocal;
+            visualReview.Visible=reviewModel.Visible=IsLocal;
             startLocal.Visible = checkLocal.Visible = IsLocal;
             providerNote.Text = IsLocal
-                ? "AI sets furniture dimensions and style; adjustable geometry builds the plan. Other objects use experimental generation."
+                ? "AI designs the parts and layout. Geometry checks and optional preview review can request corrections."
                 : "Sends your description to OpenAI. API access and billing required.";
             modelLabel.Text = IsLocal ? "Downloaded Ollama model" : "OpenAI model";
             status.Text = IsLocal ? "Start local AI, check models, then describe your block." : "Enter an API key to generate with OpenAI.";
@@ -126,15 +131,18 @@ internal sealed class PromptPanel : UserControl
         generate.Click += async (_, _) => await GenerateAsync();
         cancel.Click += (_, _) => cancellation?.Cancel();
         demo.Click += (_, _) => ShowSpec(BlockSpec.DemoKingBed(), "Offline example ready. Check units, then insert.");
-        insert.Click += (_, _) =>
+        insert.Click += async (_, _) =>
         {
+            insert.Enabled=false;
             try
             {
                 if (spec is null) return;
-                Plugin.QueueInsert(spec, units.Text);
                 status.Text = "Choose a point in the drawing. Esc cancels insertion.";
+                var inserted=await Plugin.InsertAsync(spec,units.Text);
+                status.Text=inserted?"Block inserted. Use U in AutoCAD to undo.":"Insertion canceled. You can click Insert again.";
             }
-            catch (Exception ex) { status.Text = ex.Message; }
+            catch (Exception ex) { status.Text = "Insertion failed: "+ex.Message;details.Text=status.Text; }
+            finally {insert.Enabled=spec is not null&&cancellation is null;}
         };
     }
 
@@ -152,13 +160,19 @@ internal sealed class PromptPanel : UserControl
         details.Clear();
         SetBusy(true);
         var useLocal = IsLocal;
-        status.Text = useLocal ? "Interpreting your furniture request… Other objects may take longer." : "Generating geometry…";
+        status.Text = useLocal ? "Designing parts and layout…" : "Generating geometry…";
         cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(useLocal ? 10 : 3));
         try
         {
-            var generated = useLocal
-                ? await new OllamaClient(LocalHttp).GenerateFurnitureAsync(prompt.Text, model.Text, cancellation.Token)
-                : await new AiClient(Http).GenerateAsync(prompt.Text, apiKey.Text, model.Text, cancellation.Token);
+            BlockSpec generated;
+            if(useLocal)
+            {
+                var progress=new Progress<string>(message=>{if(!IsDisposed)status.Text=message;});
+                var result=await new DesignAgent(new OllamaClient(LocalHttp)).GenerateAsync(prompt.Text,model.Text,
+                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token);
+                generated=result.Block;
+            }
+            else generated=await new AiClient(Http).GenerateAsync(prompt.Text,apiKey.Text,model.Text,cancellation.Token);
             ShowSpec(generated, "Preview ready. Review dimensions, then click Insert into drawing and pick a point.");
         }
         catch (OperationCanceledException) { status.Text = "Generation canceled or timed out. You can try again."; }
@@ -179,6 +193,7 @@ internal sealed class PromptPanel : UserControl
     {
         generate.Enabled = demo.Enabled = prompt.Enabled = apiKey.Enabled = model.Enabled = !busy;
         provider.Enabled = startLocal.Enabled = checkLocal.Enabled = !busy;
+        visualReview.Enabled=reviewModel.Enabled=!busy;
         cancel.Enabled = busy;
         insert.Enabled = !busy && spec is not null;
     }

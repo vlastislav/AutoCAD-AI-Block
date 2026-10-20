@@ -12,6 +12,8 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 if ($LASTEXITCODE -ne 0) { throw 'Plugin build failed.' }
 & $dotnetCommand run --project "$projectRoot\tests\BlockAI.Checks\BlockAI.Checks.csproj" -c Release
 if ($LASTEXITCODE -ne 0) { throw 'Core checks failed.' }
+& $dotnetCommand run --project "$projectRoot\tests\BlockAI.DesignChecks\BlockAI.DesignChecks.csproj" -c Release
+if ($LASTEXITCODE -ne 0) { throw 'Design loop checks failed.' }
 $outputRoot = Join-Path $projectRoot $OutputDirectory
 $destination = Join-Path $outputRoot 'BlockAI.bundle\Contents\Windows'
 New-Item -ItemType Directory -Force $destination | Out-Null
