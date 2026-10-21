@@ -7,12 +7,21 @@ namespace BlockAI.AutoCAD;
 
 internal static class PlanRenderer
 {
-    public static byte[] Png(BlockSpec block)
+    public static byte[] ReferencePng(ReferenceGeometry geometry)
     {
-        using var bitmap=new Bitmap(720,720);
+        geometry.Validate();
+        return Png(new BlockSpec("Reference study","Normalized source linework; physical units unknown",[],
+            geometry.Outlines.Select(o=>new Primitive("polyline",o.Points.Select(p=>new Point2(p.X*geometry.AspectRatio*1000,p.Y*1000)).ToArray(),new(0,0),0,o.Closed)).ToArray()),512);
+    }
+    public static byte[] Png(BlockSpec block)
+        =>Png(block,720);
+
+    private static byte[] Png(BlockSpec block,int size)
+    {
+        using var bitmap=new Bitmap(size,size);
         using var g=Graphics.FromImage(bitmap);
         g.Clear(Color.White);
-        Draw(g,new Rectangle(0,0,720,720),block,Color.Black);
+        Draw(g,new Rectangle(0,0,size,size),block,Color.Black);
         using var output=new MemoryStream();
         bitmap.Save(output,ImageFormat.Png);
         return output.ToArray();

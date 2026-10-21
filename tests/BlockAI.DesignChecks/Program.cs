@@ -269,6 +269,8 @@ Check(editRecording.Events.Any(e=>e.Stage=="parts-locked")&&editRecording.Events
 File.WriteAllText("artifacts-design/viewer-edits.json",editRecording.ToJson());
 File.WriteAllText("artifacts-design/viewer-edits.html",editRecording.ToHtml());
 Console.WriteLine($"{passed} checks including symmetry and scoped edits passed.");
+await LayoutChecks.Run(Check);
+Console.WriteLine($"{passed} design checks including metric placement and visual editing passed.");
 
 if(Array.IndexOf(args,"--render-recording") is var renderIndex&&renderIndex>=0&&renderIndex+1<args.Length)
 {
@@ -282,7 +284,7 @@ if(args.Contains("--live"))
 {
     using var http=new HttpClient(new RecordingHandler(new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false})){Timeout=TimeSpan.FromMinutes(8)};
     var agent=new DesignAgent(new OllamaClient(http));
-    var prompts=args.Contains("--bed")?new[]{"Queen sized bed plan, overall 1700 x 2200 mm, with two pillows and a wooden headboard"}:args.Contains("--variations")?new[]{request,"Dining chair, no cushion, 500 x 550 mm, with a curved backrest and an oval seat","Dining chair, no cushion, 500 x 550 mm, straight backrest with four slats and a tapered seat"}:new[]{request};
+    var prompts=args.Contains("--sofa")?new[]{"L shaped sofa plan view"}:args.Contains("--bed")?new[]{"Queen sized bed plan, overall 1700 x 2200 mm, with two pillows and a wooden headboard"}:args.Contains("--variations")?new[]{request,"Dining chair, no cushion, 500 x 550 mm, with a curved backrest and an oval seat","Dining chair, no cushion, 500 x 550 mm, straight backrest with four slats and a tapered seat"}:new[]{request};
     for(var i=0;i<prompts.Length;i++)
     {
         var watch=System.Diagnostics.Stopwatch.StartNew();
@@ -293,7 +295,8 @@ if(args.Contains("--live"))
         var liveReferences=args.Contains("--references")?ReferenceLibrary.Load(ReferenceLibrary.DefaultDirectory,out _).Match(prompts[i],planOnly:!args.Contains("--elevations")):[];
         if(args.Contains("--references"))Console.WriteLine("References: "+string.Join("; ",liveReferences.Select(r=>r.Analysis.Name)));
         try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default,liveRecording,args.Contains("--elevations"),PlanRenderer.Png,liveReferences,
-            maxAttempts:args.Contains("--edits")?6:3,targetedRevisions:args.Contains("--edits"),requireSymmetry:args.Contains("--edits"));}
+            maxAttempts:args.Contains("--edits")?6:3,targetedRevisions:args.Contains("--edits"),requireSymmetry:args.Contains("--edits"),metricDraft:args.Contains("--metric"),
+            renderReference:args.Contains("--metric")?PlanRenderer.ReferencePng:null,visualEdits:args.Contains("--metric"));}
         finally {liveRecording.TrySave("artifacts-design/live-recordings",out _,out _);}
         File.WriteAllText($"artifacts-design/design-{i+1}.json",JsonSerializer.Serialize(generated,BlockSpec.JsonOptions));
         File.WriteAllBytes($"artifacts-design/design-{i+1}.png",PlanRenderer.Png(generated.Block));

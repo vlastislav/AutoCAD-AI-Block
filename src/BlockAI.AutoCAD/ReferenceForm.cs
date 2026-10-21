@@ -54,6 +54,7 @@ internal sealed class ReferenceForm : Form
         if(Selected is not{} lesson)return;
         picture.Image?.Dispose();picture.Image=null;
         var path=Path.Combine(directory,lesson.Id+".png");
+        if(lesson.Geometry is not null&&File.Exists(Path.Combine(directory,lesson.Id+".geometry.png")))path=Path.Combine(directory,lesson.Id+".geometry.png");
         try{if(File.Exists(path)){using var stream=File.OpenRead(path);using var original=Image.FromStream(stream);picture.Image=new Bitmap(original);}}catch(Exception ex){status.Text="Preview unavailable: "+ex.Message;}
         var a=lesson.Analysis;
         notes.Text=$"{a.Name}\r\n{a.Category} · {a.View} · confidence {a.Confidence:0.00}\r\nReviewed for generation: {lesson.Approved}\r\n{lesson.CurationNote}\r\nTags: {string.Join(", ",a.Tags)}\r\nSource: {lesson.SourceFile} / {lesson.SourceGroup}\r\nAnalyzed by {lesson.Model}\r\n\r\n"+

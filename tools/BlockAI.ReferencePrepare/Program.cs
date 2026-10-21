@@ -5,6 +5,25 @@ using System.Text.Json;
 using System.Net;
 
 string Option(string key,string fallback="") {var index=Array.IndexOf(args,key);return index>=0&&index+1<args.Length?args[index+1]:fallback;}
+if(Option("--geometry-from-export") is {Length:>0} geometrySource)
+{
+    var geometryDirectory=Path.GetFullPath(Option("--library"));var lessonId=Option("--lesson-id");
+    var lesson=ReferenceLibrary.Load(geometryDirectory,out _).Lessons.Single(l=>l.Id==lessonId);
+    double[] Rect(string value){var values=value.Split(',').Select(n=>double.Parse(n,System.Globalization.CultureInfo.InvariantCulture)).ToArray();if(values.Length!=4||values.Any(n=>!double.IsFinite(n))||values[0]>=values[2]||values[1]>=values[3])throw new InvalidDataException("Use minX,minY,maxX,maxY for a geometry rectangle.");return values;}
+    var rect=Rect(Option("--geometry-rect"));var exclude=Option("--exclude-rect") is {Length:>0} excluded?Rect(excluded):null;
+    var drawing=JsonSerializer.Deserialize<ExportedDrawing>(File.ReadAllText(geometrySource),new JsonSerializerOptions(BlockSpec.JsonOptions){PropertyNameCaseInsensitive=true})!;
+    bool Within(double[] p,double[] box)=>p[0]>=box[0]&&p[0]<=box[2]&&p[1]>=box[1]&&p[1]<=box[3];
+    var paths=drawing.Strokes.Where(s=>s.Points.Length>=2&&s.Points.All(p=>Within(p,rect))&&(exclude is null||!s.Points.All(p=>Within(p,exclude))))
+        .Select(s=>s.Points.Select(p=>new Point2(p[0],p[1])).ToArray());
+    var measured=ReferenceGeometry.Create(paths,joinStrokes:true);
+    File.WriteAllText(Path.Combine(geometryDirectory,lessonId+".geometry.json"),JsonSerializer.Serialize(measured,BlockSpec.JsonOptions));
+    using var bitmap=new Bitmap(900,900);using var graphics=Graphics.FromImage(bitmap);graphics.Clear(Color.White);graphics.SmoothingMode=SmoothingMode.AntiAlias;using var pen=new Pen(Color.FromArgb(20,35,45),1.5f);
+    var scale=Math.Min(820/measured.AspectRatio,820);var ox=(900-measured.AspectRatio*scale)/2;var oy=(900-scale)/2;
+    foreach(var outline in measured.Outlines)graphics.DrawLines(pen,outline.Points.Select(p=>new PointF((float)(ox+p.X*measured.AspectRatio*scale),(float)(oy+(1-p.Y)*scale))).ToArray());
+    bitmap.Save(Path.Combine(geometryDirectory,lessonId+".geometry.png"),ImageFormat.Png);
+    Console.WriteLine($"Extracted {measured.Outlines.Length} outlines / {measured.Outlines.Sum(o=>o.Points.Length)} points for {lesson.Analysis.Name}. Inspect .geometry.png before installation.");
+    return;
+}
 var installSource=Option("--install-from");
 if(installSource.Length>0)
 {
@@ -15,7 +34,7 @@ if(installSource.Length>0)
     foreach(var lesson in library.Lessons)
     {
         if(args.Contains("--force")||!File.Exists(Path.Combine(destination,lesson.Id+".lesson.json")))ReferenceLibrary.Save(destination,lesson);
-        foreach(var extension in new[]{".png",".initial-analysis.json",".geometry.json"})
+        foreach(var extension in new[]{".png",".initial-analysis.json",".geometry.json",".geometry.png"})
         {var source=Path.Combine(installSource,lesson.Id+extension);var target=Path.Combine(destination,lesson.Id+extension);if(File.Exists(source)&&(args.Contains("--force")||!File.Exists(target)))File.Copy(source,target,true);}
     }
     Console.WriteLine($"Installed {library.Lessons.Length} named studies ({library.Lessons.Count(l=>l.Approved)} reviewed) to {destination}. Existing labels are preserved unless --force is supplied.");
@@ -103,7 +122,7 @@ for(var i=0;i<candidates.Length;i++)
     catch(Exception ex){Console.Error.WriteLine($"FAILED {c.Source} / {c.Group}: {ex.Message}");report.Add(new{source=c.Source,group=c.Group,error=ex.Message});}
 }
 File.WriteAllText(Path.Combine(directory,"catalog.json"),JsonSerializer.Serialize(report,new JsonSerializerOptions(BlockSpec.JsonOptions){WriteIndented=true}));
-File.WriteAllText(Path.Combine(directory,"index.html"),"<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Local furniture reference studies</title><style>body{font:15px/1.5 Segoe UI,sans-serif;background:#eef2f6;color:#182739;margin:30px}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px}article{background:white;padding:18px;border-radius:12px;min-width:0}img{width:100%;height:300px;object-fit:contain}h2{font-size:19px}pre{font:12px/1.5 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto}small{overflow-wrap:anywhere}</style><h1>Local furniture reference studies</h1><p>AI-extracted observations, not verified construction facts or trained model weights. Source artwork stays local. Generation receives descriptive lessons, not these outlines.</p><main>"+string.Join("",cards)+"</main></html>");
+File.WriteAllText(Path.Combine(directory,"index.html"),"<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Local furniture reference studies</title><style>body{font:15px/1.5 Segoe UI,sans-serif;background:#eef2f6;color:#182739;margin:30px}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px}article{background:white;padding:18px;border-radius:12px;min-width:0}img{width:100%;height:300px;object-fit:contain}h2{font-size:19px}pre{font:12px/1.5 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto}small{overflow-wrap:anywhere}</style><h1>Local furniture reference studies</h1><p>AI-extracted observations, not verified construction facts or trained model weights. Source artwork stays local. Reviewed studies can supply notes, normalized geometric summaries and isolated reference previews. Source linework remains private.</p><main>"+string.Join("",cards)+"</main></html>");
 Console.WriteLine("Catalog: "+Path.Combine(directory,"index.html"));
 if(thumbnails.Count>0)
 {

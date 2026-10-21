@@ -12,7 +12,8 @@ public sealed class DesignAgent(OllamaClient client)
     public async Task<DesignResult> GenerateAsync(string prompt,string model,string? reviewModel,
         Func<BlockSpec,byte[]>? render,IProgress<string>? progress,CancellationToken cancellation,DesignRecording? recording=null,
         bool elevations=false,Func<DesignViews,byte[]>? renderViews=null,IReadOnlyList<ReferenceLesson>? references=null,
-        int maxAttempts=3,bool targetedRevisions=false,bool requireSymmetry=false)
+        int maxAttempts=3,bool targetedRevisions=false,bool requireSymmetry=false,bool metricDraft=false,
+        Func<ReferenceGeometry,byte[]>? renderReference=null,bool visualEdits=false)
     {
         var currentAttempt=0;
         try
@@ -35,16 +36,30 @@ public sealed class DesignAgent(OllamaClient client)
         DesignPlan? currentPlan=null;
         HashSet<int>? editableParts=null;
         var allowAdd=true;
+        var blockingError="";
+        var failedShapes=new Dictionary<string,int>();
+        ConstructionFrame? retainedAssembly=null;DesignPlan? retainedBuiltPlan=null;
+        byte[]? currentPreview=null;byte[]? referencePreview=null;
+        var imageStudy=selected.FirstOrDefault(r=>r.Geometry is not null);
+        if(imageStudy is not null&&renderReference is not null)
+        {
+            try{referencePreview=renderReference(imageStudy.Geometry!);recording?.Add(0,"reference-preview","Prepared generated reference-linework preview for study "+imageStudy.Id+". Image bytes are not recorded.");}
+            catch(Exception ex) when(ex is not OperationCanceledException){recording?.Add(0,"reference-preview-skipped","Reference preview unavailable: "+ex.Message);}
+        }
         for(var attempt=1;attempt<=maxAttempts;attempt++)
         {
             currentAttempt=attempt;
             cancellation.ThrowIfCancellationRequested();
             recording?.Add(attempt,"request",feedback.Length==0?"Requesting a part-based plan.":"Required corrections: "+feedback);
             progress?.Report(attempt==1?"Designing parts and their arrangement…":$"Editing design ({attempt}/{maxAttempts}): {feedback}");
-            var input=prompt+referenceContext;
-            if(symmetry)input+="\nREQUIRED: left/right geometric symmetry. Center major surfaces; use one mirrored definition for paired parts. Actual visible outlines will be checked within 2 mm. Do not invent extra parts merely to balance an incorrect layout.";
             var editing=targetedRevisions&&currentPlan?.Parts is {Length:>=2 and <=24};
-            if(editing)previous=JsonSerializer.Serialize(currentPlan,BlockSpec.JsonOptions);
+            var input=prompt+(editing?ReferenceLibrary.Context(selected,includeGeometry:false):referenceContext);
+            if(symmetry)input+="\nREQUIRED: left/right geometric symmetry. Center major surfaces; use one mirrored definition for paired parts. Actual visible outlines will be checked within 2 mm. Do not invent extra parts merely to balance an incorrect layout.";
+            if(editing)previous=metricDraft?MetricDesign.ToJson(currentPlan!):JsonSerializer.Serialize(currentPlan,BlockSpec.JsonOptions);
+            if(editing)input+=DesignRevision.Measurements(currentPlan!);
+            var toolImage=editing&&visualEdits?currentPreview:!editing?referencePreview:null;
+            if(toolImage is not null)input+=editing?"\nThe image shows the CURRENT failed/rejected assembly to edit. Inspect its actual part placement before proposing adjustments; do not start again from a reference image."
+                :"\nThe image shows normalized reference LINEWORK for study "+imageStudy!.Id+" (not the proposed design). Interpret its silhouette, connected seating runs, corners and negative space. It is guidance, not an outline to trace or a proof of physical dimensions.";
             if(editing&&editableParts is not null)input+="\nLOCKED ASSEMBLY: only these zero-based part indices may be replaced or removed: ["+string.Join(",",editableParts.Order())+"]. All other existing parts are locked. New parts "+(allowAdd?"may be added only to resolve the reported missing/connection/symmetry issue.":"are not allowed for this correction.");
             if(previous.Length>0) input+="\nPrevious plan:\n"+previous+"\nRequired corrections:\n"+feedback;
             else if(feedback.Length>0)input+="\nRequired corrections:\n"+feedback;
@@ -54,9 +69,10 @@ public sealed class DesignAgent(OllamaClient client)
                 var vertical=chairRequest?DesignPlan.ElevationInstructions:DesignPlan.ElevationInstructions[..DesignPlan.ElevationInstructions.IndexOf("Example chair:",StringComparison.Ordinal)]+"\nFront projects X/Z looking from -Y; right side projects Y/Z looking from +X. Use the requested furniture's own construction; do not add chair parts.";
                 var guidance=attempt==1?(elevations?vertical+"\n"+(chairRequest?DesignPlan.ElevationExample:""):chairRequest?DesignPlan.WorkedExample:"")
                     :(elevations?vertical+"\n":"")+"REVISE the previous assembly using the specific feedback. Change the named geometry/placement/depth or dimensions; renaming or rewriting the description is not a revision. Preserve parts that already satisfy the request. Do not restart from the worked example.";
-                if(editing)guidance=(elevations?vertical+"\n":"")+DesignRevision.Instructions;
-                previous=await client.ToolJsonAsync(model,DesignPlan.InstructionsFor(prompt)+"\n"+guidance,input,
-                    editing?DesignRevision.SchemaFor(elevations):DesignPlan.SchemaFor(elevations),null,cancellation);
+                if(editing)guidance=(elevations?vertical+"\n":"")+DesignRevision.InstructionsFor(metricDraft);
+                var system=metricDraft?MetricDesign.InstructionsFor(prompt)+(editing?"\n"+DesignRevision.InstructionsFor(true):""):DesignPlan.InstructionsFor(prompt)+"\n"+guidance;
+                previous=await client.ToolJsonAsync(model,system,input,
+                    editing?DesignRevision.SchemaFor(elevations,metricDraft):metricDraft?MetricDesign.SchemaFor(elevations):DesignPlan.SchemaFor(elevations),toolImage,cancellation);
             }
             catch(InvalidDataException ex) when(ex.Message.Contains("incomplete",StringComparison.OrdinalIgnoreCase))
             {
@@ -69,18 +85,26 @@ public sealed class DesignAgent(OllamaClient client)
             DesignPlan plan;
             BlockSpec block;
             DesignViews? views=null;
+            ConstructionFrame? lastAssembly=null;
+            ConstructionFrame? lastFitted=null;
+            var applied=false;
             try
             {
                 var lockedParts=editing&&editableParts is not null?currentPlan!.Parts.Where((_,i)=>!editableParts.Contains(i)).ToArray():null;
-                plan=editing?DesignRevision.Apply(currentPlan!,previous,editableParts,allowAdd):DesignPlan.Parse(previous);
+                plan=editing?DesignRevision.Apply(currentPlan!,previous,editableParts,allowAdd,metricDraft):metricDraft?MetricDesign.Parse(previous,prompt):DesignPlan.Parse(previous);
+                if(metricDraft&&!editing)recording?.Add(attempt,"coordinate-conversion","Converted explicit millimeter part boxes to normalized engine coordinates. Raw tool arguments retain the original millimeter fields.");
                 currentPlan=plan;
+                applied=true;
                 if(lockedParts is not null)editableParts=plan.Parts.Select((p,i)=>(p,i)).Where(x=>!lockedParts.Any(p=>ReferenceEquals(p,x.p))).Select(x=>x.i).ToHashSet();
                 if(editing)recording?.Add(attempt,"revision-applied","Applied indexed part edits to the previous assembly. Unmentioned parts and overall dimensions were preserved.");
                 recording?.Add(attempt,"proposal","AI-proposed parts and their requested parameters. Bounding boxes are proposals, not constructed outlines.",plan:plan);
                 progress?.Report("Building geometry and checking dimensions and constraints…");
-                Action<ConstructionFrame>? observe=recording is null?null:frame=>recording.Add(attempt,frame.Stage,frame.Message,frame:frame);
+                Action<ConstructionFrame> observe=frame=>{if(frame.Stage=="assembled")lastAssembly=frame;if(frame.Stage=="fitted"&&frame.View=="plan")lastFitted=frame;recording?.Add(attempt,frame.Stage,frame.Message,frame:frame);};
                 if(elevations){views=ElevationBuilder.Build(plan,prompt,observe);block=views.Plan;}
-                else block=plan.Build(prompt,observe);
+                else block=plan.Build(prompt,observe,preserveScale:metricDraft);
+                retainedAssembly=lastFitted??lastAssembly;retainedBuiltPlan=currentPlan;
+                if(visualEdits&&render is not null)
+                {try{currentPreview=render(block);}catch(Exception previewError) when(previewError is not OperationCanceledException){recording?.Add(attempt,"edit-preview-skipped",previewError.Message);}}
                 if(symmetry)
                 {
                     PlanSymmetry.Validate(block);
@@ -88,7 +112,36 @@ public sealed class DesignAgent(OllamaClient client)
                 }
             }
             catch(Exception ex) when(ex is JsonException or InvalidDataException)
-            {feedback=ex.Message+" "+visualCorrections;recording?.Add(attempt,"validation-failed",feedback);continue;}
+            {
+                if(applied||blockingError.Length==0)blockingError=ex.Message;
+                if(metricDraft&&targetedRevisions&&applied&&ex.Data["editableIndices"] is int[] affected&&affected.Length>0)
+                {
+                    var scope=affected.ToHashSet();if(editableParts is not null)scope.IntersectWith(editableParts);
+                    if(scope.Count>0)editableParts=scope;
+                    recording?.Add(attempt,"parts-locked","Geometry failure scoped to indices ["+string.Join(",",(editableParts??new HashSet<int>()).Order())+"]. Other existing parts remain locked.");
+                }
+                var stalled=editing&&!applied;
+                if(lastAssembly is not null)
+                {
+                    retainedAssembly=lastFitted??lastAssembly;retainedBuiltPlan=currentPlan;
+                    if(visualEdits&&render is not null)
+                    {
+                        try{currentPreview=render(new BlockSpec("Failed draft","Current constructed geometry",[],lastFitted?.Geometry.Select(g=>g.Geometry).ToArray()??lastAssembly.Geometry.Select(g=>g.Geometry with {Points=g.Geometry.Points.Select(p=>new Point2(p.X*currentPlan!.Width,p.Y*currentPlan.Depth)).ToArray()}).ToArray()));}
+                        catch(Exception previewError) when(previewError is not OperationCanceledException){recording?.Add(attempt,"edit-preview-skipped",previewError.Message);}
+                    }
+                    var signature=GeometryFingerprint(new BlockSpec("Diagnostic","Constructed outlines",[],lastAssembly.Geometry.Select(g=>g.Geometry with {Points=g.Geometry.Points.Select(p=>new Point2(p.X*1000,p.Y*1000)).ToArray()}).ToArray()));
+                    failedShapes.TryGetValue(signature,out var repeats);failedShapes[signature]=repeats+1;stalled=repeats>0;
+                }
+                feedback=blockingError+(ex.Message==blockingError?"":" Latest edit error: "+ex.Message)+" "+visualCorrections;
+                if(stalled)
+                {
+                    feedback+=" The failed construction is unchanged or the edit was rejected. Use a focused millimeter adjustment against the current part measurements; do not resend identical parts. The original blocking error above is still unresolved.";
+                    recording?.Add(attempt,"revision-stalled","No progress on failed construction; previous constructed outlines retained where available. "+feedback,
+                        frame:retainedAssembly is not null&&ReferenceEquals(retainedBuiltPlan,currentPlan)?retainedAssembly with {Stage="revision-stalled",Message="Retained outlines from the last constructed assembly; the rejected patch produced no new geometry."}:null);
+                }
+                recording?.Add(attempt,"validation-failed",feedback);continue;
+            }
+            blockingError="";
             var geometryFingerprint=GeometryFingerprint(block,views?.Front,views?.Side);
             if(rejectedGeometry==geometryFingerprint)
             {

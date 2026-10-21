@@ -18,9 +18,11 @@ public sealed record ReferenceGeometry(double AspectRatio,ReferenceOutline[] Out
             throw new InvalidDataException("Invalid reference relationships.");
     }
 
-    public static ReferenceGeometry Create(IEnumerable<Point2[]> source)
+    public static ReferenceGeometry Create(IEnumerable<Point2[]> source,bool joinStrokes=false)
     {
-        var paths=source.ToArray();var all=paths.SelectMany(p=>p).ToArray();
+        var paths=source.ToArray();
+        if(joinStrokes)paths=JoinStrokes(paths);
+        var all=paths.SelectMany(p=>p).ToArray();
         if(all.Length==0||all.Any(p=>!double.IsFinite(p.X)||!double.IsFinite(p.Y)))throw new InvalidDataException("No finite reference geometry.");
         var minX=all.Min(p=>p.X);var minY=all.Min(p=>p.Y);var w=all.Max(p=>p.X)-minX;var h=all.Max(p=>p.Y)-minY;
         if(w<=0||h<=0||paths.Length>64)throw new InvalidDataException("Isolate one object with at most 64 outlines.");
@@ -41,6 +43,29 @@ public sealed record ReferenceGeometry(double AspectRatio,ReferenceOutline[] Out
     }
 
     private static double Distance(Point2 a,Point2 b)=>Math.Sqrt((a.X-b.X)*(a.X-b.X)+(a.Y-b.Y)*(a.Y-b.Y));
+    private static Point2[][] JoinStrokes(Point2[][] source)
+    {
+        if(source.Length>512||source.Any(p=>p.Length<2||p.Any(v=>!double.IsFinite(v.X)||!double.IsFinite(v.Y))))throw new InvalidDataException("Isolate finite strokes from a single object before joining.");
+        var all=source.SelectMany(p=>p).ToArray();if(all.Length==0)return source;
+        var tolerance=Math.Max(all.Max(p=>p.X)-all.Min(p=>p.X),all.Max(p=>p.Y)-all.Min(p=>p.Y))*1e-6;
+        var paths=source.Select(p=>p.ToArray()).ToList();
+        while(true)
+        {
+            var endpoints=paths.SelectMany((p,i)=>Distance(p[0],p[^1])<=tolerance?Array.Empty<(int Index,bool End,Point2 Point)>():new (int Index,bool End,Point2 Point)[]{(i,false,p[0]),(i,true,p[^1])}).ToArray();
+            var merged=false;
+            foreach(var endpoint in endpoints)
+            {
+                var candidates=endpoints.Where(e=>e.Index!=endpoint.Index&&Distance(e.Point,endpoint.Point)<=tolerance).ToArray();
+                if(candidates.Length!=1)continue;var partner=candidates[0];
+                if(endpoints.Count(e=>e.Index!=partner.Index&&Distance(e.Point,partner.Point)<=tolerance)!=1)continue;
+                var a=endpoint.End?paths[endpoint.Index]:paths[endpoint.Index].Reverse().ToArray();
+                var b=partner.End?paths[partner.Index].Reverse().ToArray():paths[partner.Index];
+                var joined=a.Concat(b.Skip(1)).ToArray();
+                paths[endpoint.Index]=joined;paths.RemoveAt(partner.Index);merged=true;break;
+            }
+            if(!merged)return paths.ToArray();
+        }
+    }
     private static Point2[] Simplify(Point2[] points,double tolerance)
     {
         if(points.Length<=2)return points;

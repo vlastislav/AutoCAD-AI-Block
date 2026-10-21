@@ -37,6 +37,8 @@
   check(el('referenceGeometry').querySelectorAll('polyline').length===1&&el('referenceGeometry').textContent.includes('study input'),'viewer shows measured study geometry separately from generated output');
   api.load(JSON.parse(fixtures.edits));
   check(api.getState().attempt===4&&api.getState().status==='succeeded','viewer replays a successful fourth edit attempt');
+  api.load(JSON.parse(fixtures.placement));el('attempts').children[2].click();el('scrub').value=el('scrub').max;el('scrub').dispatchEvent(new Event('input'));
+  check(el('left').querySelectorAll('.shape').length>0&&el('issue').textContent.includes('no parameter changes'),'stalled attempt displays retained geometry and the real blocking feedback');
   api.load(JSON.parse(fixtures.unchanged));
   const unchangedStep=[...el('steps').children].find(b=>b.textContent.includes('Unchanged revision rejected'));unchangedStep.click();
   check(el('stage').classList.contains('fail')&&el('message').textContent.includes('same visible geometry'),'viewer explains why a renamed duplicate was not a revision');

@@ -63,7 +63,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.6.3 · Plan views · Edit-based revisions");
+        Label("v0.6.4 · Plan views · Edit-based revisions");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -223,7 +223,9 @@ internal sealed class PromptPanel : UserControl
                 var progress=new Progress<string>(message=>{if(!IsDisposed)status.Text=message;});
                 var result=await new DesignAgent(new OllamaClient(LocalHttp)).GenerateAsync(prompt.Text,model.Text,
                     visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,references:references,
-                    maxAttempts:(int)attemptLimit.Value,targetedRevisions:true,requireSymmetry:requireSymmetry.Checked);
+                    maxAttempts:(int)attemptLimit.Value,targetedRevisions:true,requireSymmetry:requireSymmetry.Checked,metricDraft:true,
+                    renderReference:model.Text.StartsWith("qwen3.5",StringComparison.OrdinalIgnoreCase)?PlanRenderer.ReferencePng:null,
+                    visualEdits:model.Text.StartsWith("qwen3.5",StringComparison.OrdinalIgnoreCase));
                 generated=result.Block;
                 if(result.Front is not null&&result.Side is not null)generatedViews=new(generated,result.Front,result.Side);
             }

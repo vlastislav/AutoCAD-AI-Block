@@ -4,6 +4,20 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a plan and optional front/right-side elevations, and insert a selected view as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
+## v0.6.4: millimeter placement and grounded visual edits
+
+The local palette now drafts explicit `xMm`, `yMm`, `widthMm`, `depthMm`, and `gapMm` boxes. Whole-part replacements/additions use the same units, while polygon/curve points remain local fractions. The engine converts boxes internally and preserves their dimensions; a footprint mismatch is sent back for correction instead of silently stretching all parts. The legacy normalized workflow still supports the prior modest-overflow fitting behavior.
+
+Repairs can adjust individual properties in millimeters. Identical parameter resubmissions are rejected, repeated failed constructions are flagged, and the original blocking error stays in context. Geometry failures with identified affected parts also restrict the edit scope. At most two parts may be replaced/removed/added per metric patch; untouched parts remain intact. These controls cannot make a model solve a problem it does not understand.
+
+For the installed `qwen3.5` vision designer, the first draft can receive a rendered geometric reference; repair calls receive the current draft instead. Full reference geometry stays in the recording; model text receives a bounded geometric summary to fit the local 8192-token context. Source and draft image bytes are not stored in recordings. Other model names receive the metric tools and reference notes/geometry summary without automatic image input.
+
+The private corner-sofa study now has joined DWG linework and a verified isolated preview; other studies vary in available geometry. Plain sofa prompts do not retrieve a corner sofa merely because it has geometry. The library is not trained model weights and does not supply blocks to insert. Sofa checks reject disconnected structural/seating parts and distinguish L-shaped seating from a plain rectangular base or one straight seating run.
+
+Restart AutoCAD, `NETLOAD` `artifacts-v064\BlockAI.bundle\Contents\Windows\BlockAI.dll`, and run `AIBLOCK` (v0.6.4). Keep the core DLL beside it. Furniture design/reviewer accuracy remains experimental; passing dimensions alone does not establish correct furniture geometry.
+
+Live testing of the L-shaped sofa request still exhausted six attempts on footprint/placement errors and invalid repairs. The revised tools and checks are implemented and regression-tested, but this is not evidence that the small local model can reliably produce correct furniture. The scripted `placement-demo.html` demonstrates a successful measured repair and a rejected unchanged retry; it is explicitly labeled as a demonstration.
+
 ## v0.6.3: scoped edits, symmetry, and more attempts
 
 After the first local draft, the palette requests indexed replacements/additions/removals instead of a whole new design. Unmentioned part parameters and assembly dimensions are preserved. Following a visual rejection, only implicated part indices may be replaced/removed; other existing parts are locked. Unneeded additions, empty patches, invalid indices and full-design responses are rejected. Locks are preserved when an edit fails validation. Corrections stay in the retry context and are rechecked by the reviewer, which can still make mistakes.

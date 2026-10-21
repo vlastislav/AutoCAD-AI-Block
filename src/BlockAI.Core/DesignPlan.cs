@@ -18,11 +18,13 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     public static DesignPlan Parse(string json) => JsonSerializer.Deserialize<DesignPlan>(json, BlockSpec.JsonOptions)
         ?? throw new InvalidDataException("The model returned no design plan.");
 
-    public BlockSpec Build(string prompt,Action<ConstructionFrame>? observe=null,bool useVerticalDepth=false)
+    public BlockSpec Build(string prompt,Action<ConstructionFrame>? observe=null,bool useVerticalDepth=false,bool preserveScale=false)
     {
         var origins=new Dictionary<Primitive,int>();
         var built=new List<(string Role,Primitive Geometry)>();
         var partIndex=-1;
+        InvalidDataException Problem(string message,params int[] affected)
+        {var error=new InvalidDataException(message);error.Data["editableIndices"]=affected.Distinct().ToArray();return error;}
         void Emit(string stage,string message,int? focus=null,string units="normalized")
         {
             if(observe is null)return;
@@ -55,7 +57,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             if(noArms&&Regex.IsMatch(role,"armrest|^arm$|^arms$")) throw new InvalidDataException("The request forbids armrests.");
             double[] numbers=[part.X,part.Y,part.W,part.H,part.Detail,part.Gap,part.Inset];
             if(numbers.Any(v=>!double.IsFinite(v))||Math.Abs(part.X)>4||Math.Abs(part.Y)>4||part.W<=0||part.H<=0||part.W>4||part.H>4||part.Detail<0||part.Detail>.45||part.Inset<0||part.Inset>.2||part.Gap<0||part.Gap>.2)
-                throw new InvalidDataException("Part boxes need finite positions between -4 and 4 and positive sizes <=4; detail <=0.45, inset/gap <=0.2.");
+                throw Problem($"Part [{partIndex}] '{part.Role}' has invalid box parameters. Positions must be finite between -4 and 4 and positive sizes <=4; detail <=0.45, inset/gap <=0.2. Use millimeter adjustments to this part, not a new design.",partIndex);
             if(part.Count is <1 or >8||part.Repeat is not("none" or "row" or "column")||part.Align is not("none" or "center" or "left" or "right"))
                 throw new InvalidDataException("Invalid repetition/alignment. Use none/row/column and none/center/left/right.");
             if(part.Repeat=="none"&&part.Count!=1) throw new InvalidDataException("Non-repeated parts must have count=1.");
@@ -138,7 +140,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             if(!signatures.TryAdd(key,item.Role))
             {
                 if(signatures[key]==item.Role) continue;
-                throw new InvalidDataException($"Parts '{signatures[key]}' and '{item.Role}' duplicate the same outline at the same level. Remove one or assign the intended above/below levels.");
+                throw Problem($"Parts '{signatures[key]}' and '{item.Role}' duplicate the same outline at the same level. Remove one or assign the intended above/below levels.",built.Where(b=>b.Role==signatures[key]||b.Role==item.Role).Select(b=>origins[b.Geometry]).ToArray());
             }
             uniqueBuilt.Add(item);
         }
@@ -194,6 +196,42 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
         var all=built.SelectMany(b=>b.Geometry.Points).ToArray();
         var minX=all.Min(p=>p.X);var minY=all.Min(p=>p.Y);var spanX=all.Max(p=>p.X)-minX;var spanY=all.Max(p=>p.Y)-minY;
         if(spanX<.1||spanY<.1) throw new InvalidDataException("The design has degenerate overall extents.");
+        var boundaryParts=built.Where(b=>b.Geometry.Points.Any(p=>Math.Abs(p.X-minX)<1e-6||Math.Abs(p.X-minX-spanX)<1e-6||Math.Abs(p.Y-minY)<1e-6||Math.Abs(p.Y-minY-spanY)<1e-6)).Select(b=>origins[b.Geometry]).Distinct().ToArray();
+        if(preserveScale&&(Math.Abs(spanX*width-width)>2||Math.Abs(spanY*depth-depth)>2))
+            throw Problem(FormattableString.Invariant($"Metric assembly extents are {spanX*width:0.#} x {spanY*depth:0.#} mm, but target footprint is {width:0.#} x {depth:0.#} mm. Part dimensions will not be silently stretched. Move/resize the implicated outer parts to span the target footprint (within 2 mm), while preserving correct internal parts. Use the current millimeter box measurements."),boundaryParts);
+        if(spanX>2||spanY>2)
+            throw new InvalidDataException(FormattableString.Invariant($"Assembly spans {spanX:0.###} x {spanY:0.###} normalized units instead of approximately 1 x 1. This is large coordinate-scale confusion, not a modest overhang. Keep overall size fixed and edit the outlying part boxes in millimeters. Do not rely on whole-assembly fitting to squeeze detached or meter-like coordinates into the footprint."));
+        if(Regex.IsMatch(prompt,@"\b(?:sofas?|couch(?:es)?|settees?)\b",RegexOptions.IgnoreCase)&&!Regex.IsMatch(prompt,@"\b(?:separated|exploded|layout|set|modular)\b",RegexOptions.IgnoreCase))
+        {
+            var main=built.Where(p=>p.Geometry.Closed&&Regex.IsMatch(p.Role,@"seat|cushion|chaise|frame|base|body|back|arm")).ToArray();
+            var start=Array.FindIndex(main,p=>Regex.IsMatch(p.Role,@"seat|chaise|cushion")&&!Regex.IsMatch(p.Role,@"back|pillow"));
+            if(start<0)throw new InvalidDataException("Sofa plan needs identifiable seating surfaces (seat/cushion/chaise roles), not just supports or a rectangular frame.");
+            var reached=new HashSet<int>{start};var pending=new Queue<int>();pending.Enqueue(start);
+            while(pending.TryDequeue(out var current))for(var i=0;i<main.Length;i++)
+                if(!reached.Contains(i)&&Touches(main[current].Geometry,main[i].Geometry)){reached.Add(i);pending.Enqueue(i);}
+            var disconnected=Enumerable.Range(0,main.Length).FirstOrDefault(i=>!reached.Contains(i),-1);
+            if(disconnected>=0)
+            {
+                var item=main[disconnected];var b=Bounds(item.Geometry);var id=origins[item.Geometry];
+                throw Problem(FormattableString.Invariant($"Sofa part [{id}] '{item.Role}' is disconnected from the seating/frame assembly. Its box before fitting: x={b.X*width:0.#}, y={b.Y*depth:0.#}, width={b.W*width:0.#}, depth={b.H*depth:0.#} mm. Move/resize this part to touch its actual neighboring frame/seat outline. Seating runs must join; do not shrink or globally rescale the design to disguise the gap."),id);
+            }
+            if(Regex.IsMatch(prompt,@"\bL[-\s]+shaped\b|\bcorner\s+(?:sofa|couch)\b",RegexOptions.IgnoreCase))
+            {
+                var seating=main.Where(p=>Regex.IsMatch(p.Role,@"seat|cushion|chaise")&&!Regex.IsMatch(p.Role,@"back|pillow")).ToArray();
+                var seatPoints=seating.SelectMany(p=>p.Geometry.Points).ToArray();
+                var sx=seatPoints.Min(p=>p.X);var sy=seatPoints.Min(p=>p.Y);var sw=seatPoints.Max(p=>p.X)-sx;var sh=seatPoints.Max(p=>p.Y)-sy;
+                var quadrants=new int[4];
+                for(var ix=0;ix<32;ix++)for(var iy=0;iy<32;iy++)
+                    if(seating.Any(p=>Inside(new(sx+(ix+.5)*sw/32,sy+(iy+.5)*sh/32),p.Geometry)))quadrants[(ix/16)*2+iy/16]++;
+                if(sw<spanX*.65||sh<spanY*.65||quadrants.Min()>256*.65||quadrants.Count(n=>n>256*.35)<3)
+                    throw new InvalidDataException("The seating surfaces do not form two joined perpendicular runs with an empty inside corner. An L-shaped frame around one straight rectangular seat is insufficient. Preserve the good run and add/reshape the perpendicular seating run; its seat must sit on the connected base, not float outside it.");
+                var footprint=main.Where(p=>Regex.IsMatch(p.Role,@"seat|cushion|chaise|frame|base|body")&&!Regex.IsMatch(p.Role,@"back|pillow")).ToArray();
+                var occupied=0;
+                for(var ix=0;ix<32;ix++)for(var iy=0;iy<32;iy++)
+                    if(footprint.Any(p=>Inside(new(minX+(ix+.5)*spanX/32,minY+(iy+.5)*spanY/32),p.Geometry)))occupied++;
+                if(occupied>32*32*.92)throw new InvalidDataException("The requested L-shaped sofa has a nearly full rectangular seating/base footprint. Create two joined perpendicular runs with an empty inside corner, or a genuinely concave polygon. A full rectangular base or frame hides that corner even if the description says L-shaped. Preserve correct parts; reshape the implicated base/seating footprint.");
+            }
+        }
         if(Regex.IsMatch(prompt,@"\bbeds?\b",RegexOptions.IgnoreCase)&&!Regex.IsMatch(prompt,@"\b(?:bunk|loft|folded|murphy|sofa)\b",RegexOptions.IgnoreCase))
         {
             var sleeping=built.Where(p=>Regex.IsMatch(p.Role,@"mattress|bedding|sleeping|duvet|quilt")).OrderByDescending(p=>{var b=Bounds(p.Geometry);return b.W*b.H;}).ToArray();
@@ -225,15 +263,16 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             built=visible;
             Emit("hidden-edges",$"Trimmed lower-level lines beneath higher opaque surfaces. {untrimmed.Length} original outlines → {built.Count} visible outlines. Equal levels do not hide each other; open paths and nonopaque parts do not mask surfaces.");
         }
-        var geometry=built.Select(b=>b.Geometry with {Points=b.Geometry.Points.Select(p=>new Point2((p.X-minX)*width/spanX,(p.Y-minY)*depth/spanY)).ToArray()}).ToArray();
+        var scaleX=preserveScale?width:width/spanX;var scaleY=preserveScale?depth:depth/spanY;
+        var geometry=built.Select(b=>b.Geometry with {Points=b.Geometry.Points.Select(p=>new Point2((p.X-minX)*scaleX,(p.Y-minY)*scaleY)).ToArray()}).ToArray();
         var spec=new BlockSpec(Name,Description,["AI composed this design from geometric tools; no furniture template was selected.",
-            $"Overall footprint fitted to {width:0.##} × {depth:0.##} mm. Parts: {string.Join(", ",Parts.Select(p=>p.Role).Distinct())}.",
+            (preserveScale?$"Metric part dimensions preserved within a {width:0.##} × {depth:0.##} mm footprint.":$"Overall footprint fitted to {width:0.##} × {depth:0.##} mm.")+ $" Parts: {string.Join(", ",Parts.Select(p=>p.Role).Distinct())}.",
             "Checked: finite geometry, footprint, same-level duplicates, declared negative constraints, connectivity and depth-based hidden lines. Visual recognition is a separate review."],geometry);
         spec.Validate();
         if(observe is not null)
         {
-            try {observe(new("fitted",FormattableString.Invariant($"Translated origin ({minX:0.####}, {minY:0.####}); scaled X by {width/spanX:0.####} and Y by {depth/spanY:0.####} to {width:0.##} × {depth:0.##} mm. Individual parts were not moved separately."),"mm",
-                geometry.Select((g,i)=>new RecordedGeometry(origins.GetValueOrDefault(built[i].Geometry,-1),built[i].Role,g)).ToArray(),Fit:new(minX,minY,width/spanX,depth/spanY)));}
+            try {observe(new("fitted",FormattableString.Invariant($"Translated origin ({minX:0.####}, {minY:0.####}); converted X by {scaleX:0.####} and Y by {scaleY:0.####} to millimeters. ")+(preserveScale?"Metric sizes preserved; no footprint stretching.":"Whole assembly fitted; individual parts were not moved separately."),"mm",
+                geometry.Select((g,i)=>new RecordedGeometry(origins.GetValueOrDefault(built[i].Geometry,-1),built[i].Role,g)).ToArray(),Fit:new(minX,minY,scaleX,scaleY)));}
             catch { /* Best effort diagnostics. */ }
         }
         return spec;
