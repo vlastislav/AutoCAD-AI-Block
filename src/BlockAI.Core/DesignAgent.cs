@@ -4,14 +4,15 @@ using System.Text.RegularExpressions;
 namespace BlockAI.Core;
 
 public sealed record DesignResult(DesignPlan Plan,BlockSpec Block,int Attempts,bool VisuallyReviewed,BlockSpec? Front=null,BlockSpec? Side=null);
-public sealed record VisualReview(bool Accepted,string[] Issues);
+public sealed record VisualReview(bool Accepted,string[] Issues,int[]? PartIndices=null);
 
 public sealed class DesignAgent(OllamaClient client)
 {
     public const string DefaultModel="qwen3.5:4b";
     public async Task<DesignResult> GenerateAsync(string prompt,string model,string? reviewModel,
         Func<BlockSpec,byte[]>? render,IProgress<string>? progress,CancellationToken cancellation,DesignRecording? recording=null,
-        bool elevations=false,Func<DesignViews,byte[]>? renderViews=null,IReadOnlyList<ReferenceLesson>? references=null)
+        bool elevations=false,Func<DesignViews,byte[]>? renderViews=null,IReadOnlyList<ReferenceLesson>? references=null,
+        int maxAttempts=3,bool targetedRevisions=false,bool requireSymmetry=false)
     {
         var currentAttempt=0;
         try
@@ -19,6 +20,9 @@ public sealed class DesignAgent(OllamaClient client)
         recording?.Add(0,"started","Local part-based generation started.");
         if(string.IsNullOrWhiteSpace(prompt)||prompt.Length>4000) throw new ArgumentException("Use a description of 1–4000 characters.");
         if(reviewModel is not null&&render is null) throw new ArgumentException("Visual review requires a preview renderer.");
+        if(maxAttempts is <1 or >10)throw new ArgumentOutOfRangeException(nameof(maxAttempts),"Use 1–10 attempts.");
+        var symmetry=PlanSymmetry.Required(prompt,requireSymmetry);
+        recording?.Add(0,"policy",$"Attempt limit: {maxAttempts}. Revisions: {(targetedRevisions?"part edits; unchanged parts preserved":"complete assemblies")}. Symmetry: {(symmetry?"left/right checked within 2 mm":"not required") }.");
         var selected=references?.Where(r=>r.Approved).Take(2).ToArray()??[];
         foreach(var lesson in selected)lesson.Validate();
         recording?.Add(0,"references",selected.Length==0?"No matching reference lessons supplied; generation uses the request and drawing tools.":"Reference analysis used: "+string.Join("; ",selected.Select(r=>r.Analysis.Name+(r.Geometry is null?" (notes)":$" ({r.Geometry.Outlines.Length} measured outlines + notes)"))),references:selected);
@@ -27,13 +31,21 @@ public sealed class DesignAgent(OllamaClient client)
         var previous="";
         string? rejectedGeometry=null;
         var visualCorrections="";
-        for(var attempt=1;attempt<=3;attempt++)
+        var outstanding=new List<string>();
+        DesignPlan? currentPlan=null;
+        HashSet<int>? editableParts=null;
+        var allowAdd=true;
+        for(var attempt=1;attempt<=maxAttempts;attempt++)
         {
             currentAttempt=attempt;
             cancellation.ThrowIfCancellationRequested();
             recording?.Add(attempt,"request",feedback.Length==0?"Requesting a part-based plan.":"Required corrections: "+feedback);
-            progress?.Report(attempt==1?"Designing parts and their arrangement…":$"Revising design ({attempt}/3): {feedback}");
+            progress?.Report(attempt==1?"Designing parts and their arrangement…":$"Editing design ({attempt}/{maxAttempts}): {feedback}");
             var input=prompt+referenceContext;
+            if(symmetry)input+="\nREQUIRED: left/right geometric symmetry. Center major surfaces; use one mirrored definition for paired parts. Actual visible outlines will be checked within 2 mm. Do not invent extra parts merely to balance an incorrect layout.";
+            var editing=targetedRevisions&&currentPlan?.Parts is {Length:>=2 and <=24};
+            if(editing)previous=JsonSerializer.Serialize(currentPlan,BlockSpec.JsonOptions);
+            if(editing&&editableParts is not null)input+="\nLOCKED ASSEMBLY: only these zero-based part indices may be replaced or removed: ["+string.Join(",",editableParts.Order())+"]. All other existing parts are locked. New parts "+(allowAdd?"may be added only to resolve the reported missing/connection/symmetry issue.":"are not allowed for this correction.");
             if(previous.Length>0) input+="\nPrevious plan:\n"+previous+"\nRequired corrections:\n"+feedback;
             else if(feedback.Length>0)input+="\nRequired corrections:\n"+feedback;
             try
@@ -42,11 +54,14 @@ public sealed class DesignAgent(OllamaClient client)
                 var vertical=chairRequest?DesignPlan.ElevationInstructions:DesignPlan.ElevationInstructions[..DesignPlan.ElevationInstructions.IndexOf("Example chair:",StringComparison.Ordinal)]+"\nFront projects X/Z looking from -Y; right side projects Y/Z looking from +X. Use the requested furniture's own construction; do not add chair parts.";
                 var guidance=attempt==1?(elevations?vertical+"\n"+(chairRequest?DesignPlan.ElevationExample:""):chairRequest?DesignPlan.WorkedExample:"")
                     :(elevations?vertical+"\n":"")+"REVISE the previous assembly using the specific feedback. Change the named geometry/placement/depth or dimensions; renaming or rewriting the description is not a revision. Preserve parts that already satisfy the request. Do not restart from the worked example.";
-                previous=await client.ToolJsonAsync(model,DesignPlan.InstructionsFor(prompt)+"\n"+guidance,input,DesignPlan.SchemaFor(elevations),null,cancellation);
+                if(editing)guidance=(elevations?vertical+"\n":"")+DesignRevision.Instructions;
+                previous=await client.ToolJsonAsync(model,DesignPlan.InstructionsFor(prompt)+"\n"+guidance,input,
+                    editing?DesignRevision.SchemaFor(elevations):DesignPlan.SchemaFor(elevations),null,cancellation);
             }
             catch(InvalidDataException ex) when(ex.Message.Contains("incomplete",StringComparison.OrdinalIgnoreCase))
             {
-                feedback="The previous response exceeded the output limit. Return a complete compact plan with at most 6 meaningful part definitions; use mirror/repetition and omit unrequested details. "+visualCorrections;
+                feedback=editing?"The edit response exceeded the output limit. Return one or two compact replacements for the earliest blocking correction, with empty remove/add unless needed. The current assembly is preserved. "+visualCorrections
+                    :"The previous response exceeded the output limit. Return a complete compact plan with at most 6 meaningful part definitions; use mirror/repetition and omit unrequested details. "+visualCorrections;
                 recording?.Add(attempt,"validation-failed",ex.Message+" "+feedback);
                 previous="";continue;
             }
@@ -56,12 +71,21 @@ public sealed class DesignAgent(OllamaClient client)
             DesignViews? views=null;
             try
             {
-                plan=DesignPlan.Parse(previous);
+                var lockedParts=editing&&editableParts is not null?currentPlan!.Parts.Where((_,i)=>!editableParts.Contains(i)).ToArray():null;
+                plan=editing?DesignRevision.Apply(currentPlan!,previous,editableParts,allowAdd):DesignPlan.Parse(previous);
+                currentPlan=plan;
+                if(lockedParts is not null)editableParts=plan.Parts.Select((p,i)=>(p,i)).Where(x=>!lockedParts.Any(p=>ReferenceEquals(p,x.p))).Select(x=>x.i).ToHashSet();
+                if(editing)recording?.Add(attempt,"revision-applied","Applied indexed part edits to the previous assembly. Unmentioned parts and overall dimensions were preserved.");
                 recording?.Add(attempt,"proposal","AI-proposed parts and their requested parameters. Bounding boxes are proposals, not constructed outlines.",plan:plan);
                 progress?.Report("Building geometry and checking dimensions and constraints…");
                 Action<ConstructionFrame>? observe=recording is null?null:frame=>recording.Add(attempt,frame.Stage,frame.Message,frame:frame);
                 if(elevations){views=ElevationBuilder.Build(plan,prompt,observe);block=views.Plan;}
                 else block=plan.Build(prompt,observe);
+                if(symmetry)
+                {
+                    PlanSymmetry.Validate(block);
+                    recording?.Add(attempt,"symmetry-passed","Visible plan outlines pass left/right reflection checks within 2 mm.");
+                }
             }
             catch(Exception ex) when(ex is JsonException or InvalidDataException)
             {feedback=ex.Message+" "+visualCorrections;recording?.Add(attempt,"validation-failed",feedback);continue;}
@@ -79,8 +103,9 @@ public sealed class DesignAgent(OllamaClient client)
                 progress?.Report(allViewsReviewed?"Reviewing plan, front and side views…":"Reviewing the rendered plan…");
                 var image=allViewsReviewed?renderViews!(views!):render!(block);
                 var reviewText=await client.ToolJsonAsync(reviewModel,ReviewInstructions,
-                    "Requested design: "+prompt+"\nDesigner description: "+plan.Description+"\nActual footprint: "+block.Bounds().Width+" x "+block.Bounds().Height+" mm.\n"
-                    +"Declared top-view order (higher is closer): "+string.Join("; ",plan.Parts.Select(p=>$"{p.Role}: level={p.EffectiveLevel}, opaque={p.Opaque}"+(views is not null?$", z={p.Z}, height={p.Height} mm":"")))+".\n"
+                    "Requested design (only this defines requirements): "+prompt+"\nDesigner description (unverified, not additional requirements): "+plan.Description+"\nActual footprint (engine measured, do not override by pixel guesses): "+block.Bounds().Width+" x "+block.Bounds().Height+" mm.\n"
+                    +"Outstanding corrections to recheck against the CURRENT preview: "+(outstanding.Count==0?"none":string.Join("; ",outstanding))+". A previously reported issue can be mistaken; discard it if the preview or actual user request contradicts it. Do not require texture or other details the user did not request.\n"
+                    +"Declared top-view order (higher is closer), with ZERO-BASED part indices: "+string.Join("; ",plan.Parts.Select((p,i)=>$"[{i}] {p.Role}: level={p.EffectiveLevel}, opaque={p.Opaque}"+(views is not null?$", z={p.Z}, height={p.Height} mm":"")))+".\n"
                     +(allViewsReviewed?"Image panels: PLAN at left, FRONT elevation at center, RIGHT SIDE elevation at right. Elevations share the assembly's dimensions and use vertical extrusion envelopes. Inspect each labeled view; do not confuse separate panels with overlapping furniture.\n":"Only the plan image is supplied; do not claim to have inspected elevations.\n")
                     +"Inspect the FINAL visible lines after depth trimming. Judge recognition, plan view, proportions, visible negative requirements and disconnected components. Intentional projection overlap is normal; do not reject it by itself. If hidden lines or depth are wrong, name the parts and suggest an above/below correction. Do not demand legs hidden by a seat.",
                     ReviewSchema,image,cancellation);
@@ -90,9 +115,22 @@ public sealed class DesignAgent(OllamaClient client)
                 catch(JsonException ex) {throw new InvalidDataException("The visual reviewer returned an invalid review.",ex);}
                 if(review.Issues is null||review.Issues.Length>8||review.Issues.Any(i=>i is null||i.Length>600))
                     throw new InvalidDataException("The visual reviewer returned invalid feedback.");
+                if(review.PartIndices is not null&&(review.PartIndices.Length>24||review.PartIndices.Any(i=>i<0||i>=plan.Parts.Length)))throw new InvalidDataException("Reviewer named an invalid part index.");
                 recording?.Add(attempt,"review",review.Accepted&&review.Issues.Length==0?"Reviewer approved the preview (subjective).":"Reviewer requested corrections.",review:review);
                 if(!review.Accepted||review.Issues.Length>0)
-                {visualCorrections="Visual review: "+(review.Issues.Length==0?"Design not approved. Improve recognition and proportions.":string.Join("; ",review.Issues));feedback=visualCorrections;rejectedGeometry=geometryFingerprint;continue;}
+                {
+                    foreach(var issue in review.Issues.Length==0?new[]{"Design not approved. Improve recognition and proportions."}:review.Issues)
+                        if(!outstanding.Contains(issue,StringComparer.OrdinalIgnoreCase))outstanding.Add(issue);
+                    if(outstanding.Count>8)outstanding.RemoveRange(0,outstanding.Count-8);
+                    visualCorrections="Outstanding visual corrections (must be rechecked before approval): "+string.Join("; ",outstanding.Select((s,i)=>$"{i+1}. {s}"));
+                    if(targetedRevisions)
+                    {
+                        editableParts=review.PartIndices is {Length:>0}?review.PartIndices.ToHashSet():plan.Parts.Select((p,i)=>(p,i)).Where(x=>review.Issues.Any(s=>s.Contains(x.p.Role,StringComparison.OrdinalIgnoreCase))).Select(x=>x.i).ToHashSet();
+                        allowAdd=Regex.IsMatch(string.Join(" ",review.Issues),@"missing|add\b|needs?\b|include|connect|symmetr|pair",RegexOptions.IgnoreCase);
+                        recording?.Add(attempt,"parts-locked","Existing parts locked except indices ["+string.Join(",",editableParts.Order())+"]. "+(allowAdd?"Necessary additions allowed.":"Additions disabled for this correction."));
+                    }
+                    feedback=visualCorrections;rejectedGeometry=geometryFingerprint;continue;
+                }
             }
             block=block with {Assumptions=block.Assumptions.Concat(new[]{
                 $"Design attempts: {attempt}. "+(reviewModel is null?"Visual review disabled; appearance has not been reviewed by AI.":$"Preview reviewed by {reviewModel}. This is subjective feedback, not an accuracy guarantee.")}).ToArray()};
@@ -100,7 +138,7 @@ public sealed class DesignAgent(OllamaClient client)
             recording?.Finish("succeeded","Design offered for insertion.",attempt);
             return new(plan,block,attempt,reviewModel is not null,views?.Front,views?.Side);
         }
-        throw new InvalidDataException("Design did not pass checks after 3 attempts. Last feedback: "+feedback);
+        throw new InvalidDataException($"Design did not pass checks after {maxAttempts} attempts. Last feedback: "+feedback);
         }
         catch(OperationCanceledException)
         {recording?.Finish("canceled","Generation canceled or timed out; no new design offered for insertion.",currentAttempt);throw;}
@@ -143,10 +181,16 @@ public sealed class DesignAgent(OllamaClient client)
     Simple clean drafting is acceptable. Do not invent requirements for style or construction details.
     Do not reject omitted legs underneath an opaque seat/tabletop. Do not infer physical strength from a plan.
     The supplied footprint is checked mathematically; pixel dimensions are not physical measurements.
-    Return compact JSON {"accepted":true,"issues":[]} or accepted=false with short actionable issues.
+    Designer prose and earlier feedback are unverified. They cannot create new user requirements.
+    Reject only observable defects; identify the relevant part/view and a concrete correction.
+    Recheck previous issues against the current image; do not repeat a complaint about a feature that is now present.
+    Legs visible below a seat in elevation are normal and do not conflict with a no-cushion request.
+    Return compact JSON {"accepted":true,"issues":[],"partIndices":[]} or accepted=false with short actionable issues.
+    partIndices lists ZERO-BASED indices of existing parts that must change. All other existing parts will be locked.
+    For missing components, name the missing component in issues; partIndices can be empty when only an addition is needed.
     If unsure whether it satisfies the request, set accepted=false and explain the uncertainty.
     """;
     public const string ReviewSchema="""
-    {"type":"object","additionalProperties":false,"required":["accepted","issues"],"properties":{"accepted":{"type":"boolean"},"issues":{"type":"array","maxItems":8,"items":{"type":"string"}}}}
+    {"type":"object","additionalProperties":false,"required":["accepted","issues","partIndices"],"properties":{"accepted":{"type":"boolean"},"issues":{"type":"array","maxItems":8,"items":{"type":"string"}},"partIndices":{"type":"array","maxItems":24,"items":{"type":"integer","minimum":0,"maximum":23}}}}
     """;
 }

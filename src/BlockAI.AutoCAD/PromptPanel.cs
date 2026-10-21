@@ -22,6 +22,9 @@ internal sealed class PromptPanel : UserControl
     private readonly TextBox reviewModel = new() {Text=DesignAgent.DefaultModel};
     private readonly CheckBox elevations = new() {Text="Generate plan, front and right-side views",Checked=false,Visible=false,AutoSize=true};
     private readonly CheckBox useReferences = new() {Text="Use matching reference analyses",Checked=true,AutoSize=true};
+    private readonly CheckBox requireSymmetry = new() {Text="Check left/right symmetry (except asymmetric requests)",Checked=true,AutoSize=true};
+    private readonly NumericUpDown attemptLimit = new() {Minimum=1,Maximum=10,Value=6};
+    private readonly Label attemptLabel = new() {Text="Maximum generation attempts (edits after the first draft)",AutoSize=true};
     private readonly Button referenceLibrary = new() {Text="Reference library — names and design notes",Height=30};
     private readonly Label referenceStatus = new() {Text="References are selected by name, category and tags.",AutoSize=true};
     private readonly ComboBox drawingView = new() {DropDownStyle=ComboBoxStyle.DropDownList,Enabled=false};
@@ -60,7 +63,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.6.2 · Plan views only");
+        Label("v0.6.3 · Plan views · Edit-based revisions");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -76,6 +79,9 @@ internal sealed class PromptPanel : UserControl
         Add(model);
         Add(visualReview);
         Add(reviewModel);
+        Add(requireSymmetry);
+        Add(attemptLabel);
+        Add(attemptLimit);
         Add(useReferences);
         Add(referenceLibrary);
         Add(referenceStatus);
@@ -109,6 +115,7 @@ internal sealed class PromptPanel : UserControl
             else { if (savePrevious) localModel = model.Text; model.Text = openAiModel; }
             apiKey.Visible = !IsLocal;
             visualReview.Visible=reviewModel.Visible=useReferences.Visible=referenceLibrary.Visible=referenceStatus.Visible=IsLocal;
+            requireSymmetry.Visible=attemptLabel.Visible=attemptLimit.Visible=IsLocal;
             startLocal.Visible = checkLocal.Visible = IsLocal;
             providerNote.Text = IsLocal
                 ? "AI designs the parts and layout. Geometry checks and optional preview review can request corrections."
@@ -215,7 +222,8 @@ internal sealed class PromptPanel : UserControl
                 referenceStatus.Text=references.Length==0?"No matching reference used."+(warnings.Length>0?$" {warnings.Length} invalid lesson file(s) skipped.":""):"Using: "+string.Join("; ",references.Select(r=>r.Analysis.Name+(r.Geometry is null?" (notes)":" (measured geometry + notes)")));
                 var progress=new Progress<string>(message=>{if(!IsDisposed)status.Text=message;});
                 var result=await new DesignAgent(new OllamaClient(LocalHttp)).GenerateAsync(prompt.Text,model.Text,
-                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,references:references);
+                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,references:references,
+                    maxAttempts:(int)attemptLimit.Value,targetedRevisions:true,requireSymmetry:requireSymmetry.Checked);
                 generated=result.Block;
                 if(result.Front is not null&&result.Side is not null)generatedViews=new(generated,result.Front,result.Side);
             }
@@ -259,6 +267,7 @@ internal sealed class PromptPanel : UserControl
         provider.Enabled = startLocal.Enabled = checkLocal.Enabled = !busy;
         visualReview.Enabled=reviewModel.Enabled=elevations.Enabled=!busy;
         useReferences.Enabled=referenceLibrary.Enabled=!busy;
+        requireSymmetry.Enabled=attemptLimit.Enabled=!busy;
         drawingView.Enabled=!busy&&generatedViews is not null;
         cancel.Enabled = busy;
         insert.Enabled = !busy && spec is not null;

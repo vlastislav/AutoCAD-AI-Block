@@ -32,4 +32,6 @@ Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-demo.json" -Destina
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-views.html" -Destination "$outputRoot\three-view-demo.html"
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-views.json" -Destination "$outputRoot\three-view-demo.json"
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\shared-table-views.png" -Destination "$outputRoot\three-view-demo.png"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-edits.html" -Destination "$outputRoot\part-edit-demo.html"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-edits.json" -Destination "$outputRoot\part-edit-demo.json"
 Write-Host "Ready: $outputRoot\BlockAI.bundle"

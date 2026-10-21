@@ -4,7 +4,7 @@ $projectRoot=Split-Path $PSScriptRoot -Parent
 if(!(Test-Path -LiteralPath $Browser)){throw 'A Chromium browser is required; specify -Browser with its executable path.'}
 $outputRoot=Join-Path $projectRoot 'artifacts-design'
 $fixtures=@{}
-foreach($name in @('success','failed','canceled','views','unchanged')){
+foreach($name in @('success','failed','canceled','views','unchanged','edits')){
     $file=if($name -eq 'success'){'viewer-demo.json'}else{"viewer-$name.json"}
     $fixtures[$name]=[IO.File]::ReadAllText((Join-Path $outputRoot $file))
 }
@@ -23,11 +23,11 @@ foreach($width in @(1600,720,960)){
         $harness=Join-Path $outputRoot 'viewer-empty-checks.html'
         [IO.File]::WriteAllText($harness,$empty.Replace('</body>',$smoke+'</body>'))
     }
-    $profile=Join-Path $projectRoot ".tools\viewer-checks-$width"
+    $profile=Join-Path $projectRoot ".tools\viewer-checks-$width-$PID"
     $stdout=Join-Path $outputRoot "viewer-browser-$width.html"
     $stderr=Join-Path $outputRoot "viewer-browser-$width.log"
     $screenshot=Join-Path $outputRoot "viewer-browser-$width.png"
-    $arguments=@('--headless','--disable-gpu','--no-first-run','--no-default-browser-check',"--user-data-dir=`"$profile`"",'--allow-file-access-from-files','--dump-dom',"--screenshot=`"$screenshot`"","--window-size=$width,1200",'--virtual-time-budget=6000',"`"$(([Uri]$harness).AbsoluteUri)`"")
+    $arguments=@('--headless','--disable-gpu','--disable-background-timer-throttling','--no-first-run','--no-default-browser-check',"--user-data-dir=`"$profile`"",'--allow-file-access-from-files','--dump-dom',"--screenshot=`"$screenshot`"","--window-size=$width,1200",'--virtual-time-budget=15000',"`"$(([Uri]$harness).AbsoluteUri)`"")
     $browserProcess=Start-Process -FilePath $Browser -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if(!$browserProcess.WaitForExit(45000)){Stop-Process -Id $browserProcess.Id;throw 'Browser checks timed out.'}
     # Edge's launcher can exit before its headless child finishes writing redirected output.

@@ -4,6 +4,16 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a plan and optional front/right-side elevations, and insert a selected view as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
+## v0.6.3: scoped edits, symmetry, and more attempts
+
+After the first local draft, the palette requests indexed replacements/additions/removals instead of a whole new design. Unmentioned part parameters and assembly dimensions are preserved. Following a visual rejection, only implicated part indices may be replaced/removed; other existing parts are locked. Unneeded additions, empty patches, invalid indices and full-design responses are rejected. Locks are preserved when an edit fails validation. Corrections stay in the retry context and are rechecked by the reviewer, which can still make mistakes.
+
+The default budget is six attempts, adjustable from one to ten; cancellation and the ten-minute local generation timeout still apply. Left/right symmetry is checked on visible linework by reflection within 2 mm. It is enabled by default, with exceptions for explicitly asymmetric/corner/chaise/offset/L-shaped requests. Disable it for intentionally uneven detail. This validates geometry rather than choosing a furniture template. It does not guarantee good designs, and stricter checks may exhaust the budget.
+
+Restart AutoCAD and `NETLOAD` `artifacts-v063\BlockAI.bundle\Contents\Windows\BlockAI.dll`, then run `AIBLOCK` and confirm **v0.6.3**. Elevations remain hidden. The replay records attempt policy, applied edits, part locks and symmetry checks. Source DWGs stay private.
+
+The local Ollama smoke test returned the new edit format but still exhausted six attempts on bed geometry checks. This verifies protocol use, not reliable furniture design. Scripted regression checks separately demonstrate a successful fourth attempt, unchanged correct parts, and rejection of an edit to a locked part.
+
 ## v0.6.2: focus on plan views
 
 The palette now generates and reviews plan views only. Elevation controls are hidden, and matching uses plan references only. Elevation code and older multi-view recordings remain available for later development. Load `artifacts-v062\BlockAI.bundle\Contents\Windows\BlockAI.dll` after restarting AutoCAD and confirm **v0.6.2 · Plan views only** in `AIBLOCK`.

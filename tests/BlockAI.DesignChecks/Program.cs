@@ -231,6 +231,45 @@ File.WriteAllText("artifacts-design/viewer-failed.json",failedRecording.ToJson()
 File.WriteAllText("artifacts-design/viewer-canceled.json",cancelRecording.ToJson());
 Console.WriteLine($"{passed} design-loop checks passed.");
 
+string PatchFor(int index,DesignPart part)=>JsonSerializer.Serialize(new{replacements=new[]{new{index,part}},remove=Array.Empty<int>(),add=Array.Empty<DesignPart>()},BlockSpec.JsonOptions);
+var editedBack=back with {Shape="rectangle"};
+var patched=DesignRevision.Apply(plan,PatchFor(1,editedBack),new HashSet<int>{1},false);
+Check(ReferenceEquals(patched.Parts[0],plan.Parts[0])&&ReferenceEquals(patched.Parts[2],plan.Parts[2])&&patched.Width==plan.Width&&patched.Name==plan.Name,"indexed edits preserve untouched parts and assembly dimensions exactly");
+Reject(()=>DesignRevision.Apply(plan,PatchFor(0,seat with {W=.6}),new HashSet<int>{1},false),"edits to locked correct parts are rejected");
+Reject(()=>DesignRevision.Apply(plan,"{\"replacements\":[],\"remove\":[],\"add\":[]}"),"empty edits cannot count as repairs");
+Reject(()=>DesignRevision.Apply(plan,encoded),"full regenerated designs are rejected by the edit protocol");
+Reject(()=>DesignRevision.Apply(plan,PatchFor(22,editedBack)),"out of range edits rejected atomically");
+PlanSymmetry.Validate(block);Check(true,"actual clipped mirrored plan passes symmetry checks");
+var asymmetric=block with {Entities=block.Entities.Concat(new[]{new Primitive("polyline",[new(50,100),new(80,100)],new(0,0),0,false)}).ToArray()};
+Reject(()=>PlanSymmetry.Validate(asymmetric),"unpaired visible detail fails geometric reflection check");
+Check(!PlanSymmetry.Required("L-shaped desk",true)&&!PlanSymmetry.Required("asymmetric sofa",true)&&PlanSymmetry.Required("queen bed",true),"symmetry is required for enabled ordinary furniture but respects intentional asymmetric requests");
+var editCalls=0;var editRecording=new DesignRecording{Prompt=request,Model="scripted",ReviewModel="scripted",Demonstration=true};
+var editAgent=new DesignAgent(new OllamaClient(new HttpClient(new Handler(async(message,ct)=>
+{
+    var n=++editCalls;
+    using var body=JsonDocument.Parse(await message.Content!.ReadAsStringAsync(ct));
+    var content=body.RootElement.GetProperty("messages")[1].GetProperty("content").GetString()!;
+    if(n==3)Check(body.RootElement.GetProperty("format").GetProperty("properties").TryGetProperty("replacements",out _)&&content.Contains("only these zero-based part indices"),"repair transport uses edits and explicit part locks");
+    if(n==6)Check(content.Contains("Widen supports")&&content.Contains("locked part"),"blocked edit retains outstanding review and the last assembly");
+    return n switch
+    {
+        1=>Reply(encoded),
+        2=>Reply("{\"accepted\":false,\"issues\":[\"Make the backrest rectangular\"],\"partIndices\":[1]}"),
+        3=>Reply(PatchFor(1,editedBack)),
+        4=>Reply("{\"accepted\":false,\"issues\":[\"Widen supports\"],\"partIndices\":[2]}"),
+        5=>Reply(PatchFor(0,seat with {W=.6})), // Deliberate attempt to redesign a locked correct seat.
+        6=>Reply(PatchFor(2,support with {W=.06})),
+        _=>Reply("{\"accepted\":true,\"issues\":[],\"partIndices\":[]}")
+    };
+}))));
+var editResult=await editAgent.GenerateAsync(request,"scripted","scripted",PlanRenderer.Png,null,default,editRecording,maxAttempts:6,targetedRevisions:true,requireSymmetry:true);
+Check(editResult.Attempts==4&&editCalls==7,"fourth attempt succeeds with a six-attempt budget without accepting the locked-part edit");
+Check(JsonSerializer.Serialize(editResult.Plan.Parts[0],BlockSpec.JsonOptions)==JsonSerializer.Serialize(seat,BlockSpec.JsonOptions)&&JsonSerializer.Serialize(editResult.Plan.Parts[1],BlockSpec.JsonOptions)==JsonSerializer.Serialize(editedBack,BlockSpec.JsonOptions)&&editResult.Plan.Parts[2].W==.06,"later repairs keep the correct seat and previously repaired backrest");
+Check(editRecording.Events.Any(e=>e.Stage=="parts-locked")&&editRecording.Events.Count(e=>e.Stage=="revision-applied")==2,"replay records part locks and applied patches");
+File.WriteAllText("artifacts-design/viewer-edits.json",editRecording.ToJson());
+File.WriteAllText("artifacts-design/viewer-edits.html",editRecording.ToHtml());
+Console.WriteLine($"{passed} checks including symmetry and scoped edits passed.");
+
 if(Array.IndexOf(args,"--render-recording") is var renderIndex&&renderIndex>=0&&renderIndex+1<args.Length)
 {
     using var saved=JsonDocument.Parse(File.ReadAllText(args[renderIndex+1]));
@@ -251,9 +290,10 @@ if(args.Contains("--live"))
         var liveReviewer=args.Contains("--no-review")?null:DesignAgent.DefaultModel;
         var liveRecording=new DesignRecording {Prompt=prompts[i],Model=liveModel,ReviewModel=liveReviewer};
         DesignResult generated;
-        var liveReferences=args.Contains("--references")?ReferenceLibrary.Load(ReferenceLibrary.DefaultDirectory,out _).Match(prompts[i]):[];
+        var liveReferences=args.Contains("--references")?ReferenceLibrary.Load(ReferenceLibrary.DefaultDirectory,out _).Match(prompts[i],planOnly:!args.Contains("--elevations")):[];
         if(args.Contains("--references"))Console.WriteLine("References: "+string.Join("; ",liveReferences.Select(r=>r.Analysis.Name)));
-        try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default,liveRecording,args.Contains("--elevations"),PlanRenderer.Png,liveReferences);}
+        try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default,liveRecording,args.Contains("--elevations"),PlanRenderer.Png,liveReferences,
+            maxAttempts:args.Contains("--edits")?6:3,targetedRevisions:args.Contains("--edits"),requireSymmetry:args.Contains("--edits"));}
         finally {liveRecording.TrySave("artifacts-design/live-recordings",out _,out _);}
         File.WriteAllText($"artifacts-design/design-{i+1}.json",JsonSerializer.Serialize(generated,BlockSpec.JsonOptions));
         File.WriteAllBytes($"artifacts-design/design-{i+1}.png",PlanRenderer.Png(generated.Block));
