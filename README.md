@@ -4,7 +4,13 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a plan and optional front/right-side elevations, and insert a selected view as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
-## v0.5.0: depth visibility and three matching views
+## v0.6.0: reference studies and meaningful revisions
+
+The local generator can now use up to two reviewed furniture studies selected by category, name and tags. Open **Reference library** to inspect analyses, correct names/tags, and approve isolated image analyses. Supplied DWGs were used to prepare a private starter collection: 13 studies, 10 reviewed and enabled. Source files and derived images are not bundled or published. See [reference preparation](docs/reference-workflow.md) for the workflow and limitations.
+
+Visual review sends its corrections and the previous assembly back to Ollama. A retry with the same geometry fingerprint (coordinates quantized to 2 mm) is rejected even if names change; the replay identifies changed and unchanged revisions. There are at most three attempts. This prevents unchanged drafts being accepted as corrections, but does not guarantee the model can fix them. A live reference-guided three-view chair test exhausted its retries on duplicate/disconnected geometry; mocked success, failure and revision tests cover the control flow separately.
+
+Depth visibility and three matching views remain available:
 
 Local generation now defaults to **Generate plan, front and right-side views**. The AI supplies one shared assembly: normalized plan footprints, overall height, and each part's bottom `z` and vertical `height` in millimeters. The engine derives all three editable drawings from that assembly. Use the view selector above the preview; **Insert into drawing** inserts the currently selected view. Uncheck the three-view option for the earlier plan-only workflow. OpenAI mode remains plan-only.
 
@@ -12,13 +18,13 @@ Intentional projection overlap is accepted. A closed `opaque=true` surface hides
 
 Elevations are a first experimental implementation using **vertical extrusion envelopes**, not a complete 3D solid model. A curved seat footprint can have a rectangular side envelope; shaped/sloped legs and curved elevation profiles are not represented. Part ordering and dimensions can still be wrong, and the vision reviewer can miss them. Three-view review receives a labeled sheet at a shared drawing scale. Reference DWGs have been inventoried locally, but reference analysis/retrieval and model training are not connected to generation yet.
 
-For an offline three-view example, open `artifacts-v050\three-view-demo.html` and choose Front or Right side in the viewer. `three-view-demo.png` shows the matching projections. This is a clearly labeled scripted fixture, not a live model result. A separate live chair test completed all three views and visual review in two attempts (50.9 seconds on this machine); its first attempt duplicated a leg pair. These observations are not a quality or latency guarantee.
+For an offline three-view example, open `artifacts-v060\three-view-demo.html` and choose Front or Right side in the viewer. `three-view-demo.png` shows the matching projections. This is a clearly labeled scripted fixture, not a live model result. A separate live chair test completed all three views and visual review in two attempts (50.9 seconds on this machine); its first attempt duplicated a leg pair. These observations are not a quality or latency guarantee.
 
 ## Standalone visual debugging viewer
 
 v0.4.4 fixed the JSON placeholder error when opening the source viewer without embedded recording data. The empty viewer opens normally and lets you import a recording; generated HTML exports embed validated JSON. Browser checks cover both the demo and the empty source viewer.
 
-Open `artifacts-v050\design-viewer.html` in a browser to explore the clearly labeled demonstration recording. It replays real engine construction around scripted designer/reviewer replies: a disconnected first draft fails validation, a second draft receives visual feedback, and a third draft succeeds. Demo timings are test execution times, not AI inference benchmarks.
+Open `artifacts-v060\design-viewer.html` in a browser to explore the clearly labeled demonstration recording. It replays real engine construction around scripted designer/reviewer replies: a disconnected first draft fails validation, a second draft receives visual feedback, and a third draft succeeds. Demo timings are test execution times, not AI inference benchmarks.
 
 In the updated plugin, generate a design and click **Open design viewer**. Success, exhausted retries, model/network errors, and cancellation are saved locally as paired JSON/HTML files in `%LOCALAPPDATA%\BlockAI\DesignRecordings`. The button opens the most recently saved recording; it also finds previous recordings after the panel is reopened. Save errors are shown separately and do not prevent insertion. Files are kept until you delete them; a hard process termination before the generation's `finally` block can prevent saving.
 
@@ -33,7 +39,7 @@ The local part-based workflow has the full replay. Legacy OpenAI mode records it
 ### Build and verification
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -OutputDirectory artifacts-v050 -CheckViewer
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -OutputDirectory artifacts-v060 -CheckViewer
 ```
 
 The build runs 68 core checks and 87 construction/recording checks, and generates the portable demo. `-CheckViewer` additionally runs 27 real headless Edge checks at each of desktop and narrow widths for playback, comparison scale, part inspection, failed/canceled replay, local imports, exports and escaped text. Screenshots and browser reports are written to `artifacts-design`. To use another Chromium executable, run `scripts\check-viewer.ps1 -Browser 'path\to\browser.exe'` after the build. `tests/BlockAI.PanelChecks` separately checks the palette with a stubbed AutoCAD insertion bridge; it does not test native AutoCAD itself. A local `qwen3.5:4b` generation with visual review also completed and recorded successfully in 11.5 seconds on this machine.
@@ -56,8 +62,8 @@ The review sends a PNG rendered from the generated block, the typed request and 
 
 ### Install and test this build
 
-1. Close every AutoCAD window, reopen AutoCAD and `NETLOAD` the new DLL. For the current prepared build use `artifacts-v050\BlockAI.bundle\Contents\Windows\BlockAI.dll`, keeping `BlockAI.Core.dll` beside it.
-2. Run `AIBLOCK` and confirm the **v0.5.0** label. Use local model `qwen3.5:4b` for design/review.
+1. Close every AutoCAD window, reopen AutoCAD and `NETLOAD` the new DLL. For the current prepared build use `artifacts-v060\BlockAI.bundle\Contents\Windows\BlockAI.dll`, keeping `BlockAI.Core.dll` beside it.
+2. Run `AIBLOCK` and confirm the **v0.6.0** label. Use local model `qwen3.5:4b` for design/review.
 3. Generate, review the preview and size, select the actual drawing units, then click **Insert into drawing** and pick a point. Esc cancels placement.
 
 The insertion button now enters AutoCAD command context directly, focuses the drawing and reports success/cancellation/errors back to the palette. Finish any active AutoCAD command before inserting. `AIBLOCKINSERT` can retry the last insertion from the command line in the same drawing. The user confirmed insertion works in their AutoCAD session. Undo and non-default UCS behavior still need separate interactive checks; the off-screen UI tests stub the native bridge.

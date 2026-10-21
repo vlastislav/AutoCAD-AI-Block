@@ -69,6 +69,17 @@ internal static class Program
                 using var image = new Bitmap(panel.Width, panel.Height);
                 panel.DrawToBitmap(image, panel.ClientRectangle);
                 image.Save("artifacts-next/panel-local-preview.png");
+                using(var referenceHttp=new System.Net.Http.HttpClient())
+                using(var references=new ReferenceForm(ReferenceLibrary.DefaultDirectory,DesignAgent.DefaultModel,referenceHttp)
+                    {StartPosition=FormStartPosition.Manual,Location=new Point(-5000,-5000),ShowInTaskbar=false})
+                {
+                    references.Show();Application.DoEvents();
+                    using var referenceImage=new Bitmap(references.Width,references.Height);
+                    references.DrawToBitmap(referenceImage,references.ClientRectangle);
+                    referenceImage.Save("artifacts-next/reference-library-preview.png");
+                    Check(references.Controls.Count>0,"reference library opens independently of generation");
+                    references.Close();
+                }
                 Field<Button>("checkLocal").PerformClick();
                 for (var i = 0; i < 100 && !Field<Button>("checkLocal").Enabled; i++) await Task.Delay(100);
                 Check(Field<Label>("status").Text.StartsWith("Available local models:") || Field<Label>("status").Text.Contains("has no local models"), "live Ollama discovery updates UI");

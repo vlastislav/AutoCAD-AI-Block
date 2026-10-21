@@ -4,7 +4,7 @@ $projectRoot=Split-Path $PSScriptRoot -Parent
 if(!(Test-Path -LiteralPath $Browser)){throw 'A Chromium browser is required; specify -Browser with its executable path.'}
 $outputRoot=Join-Path $projectRoot 'artifacts-design'
 $fixtures=@{}
-foreach($name in @('success','failed','canceled','views')){
+foreach($name in @('success','failed','canceled','views','unchanged')){
     $file=if($name -eq 'success'){'viewer-demo.json'}else{"viewer-$name.json"}
     $fixtures[$name]=[IO.File]::ReadAllText((Join-Path $outputRoot $file))
 }

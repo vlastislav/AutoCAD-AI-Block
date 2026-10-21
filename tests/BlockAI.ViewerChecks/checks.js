@@ -29,6 +29,13 @@
   el('scrub').value=0;el('scrub').dispatchEvent(new Event('input'));el('speed').value='550';el('play').click();await wait(700);el('play').click();
   check(api.getState().index>0&&el('play').textContent==='Play','playback advances and pauses');
   const original=JSON.parse(fixtures.success);
+  const referenceRun=structuredClone(original);
+  referenceRun.events.find(e=>e.stage==='references').references=[{sourceFile:'reference.dwg',sourceGroup:'single chair',model:'scripted',approved:true,analysis:{name:'Dining chair reference study',category:'chair',view:'plan'}}];
+  api.load(referenceRun);
+  check(el('referenceNotes').textContent.includes('Dining chair reference study')&&el('referenceNotes').textContent.includes('reference.dwg'),'viewer identifies reference studies and their provenance');
+  api.load(JSON.parse(fixtures.unchanged));
+  const unchangedStep=[...el('steps').children].find(b=>b.textContent.includes('Unchanged revision rejected'));unchangedStep.click();
+  check(el('stage').classList.contains('fail')&&el('message').textContent.includes('same visible geometry'),'viewer explains why a renamed duplicate was not a revision');
   api.load(JSON.parse(fixtures.views));
   el('viewChoice').value='front';el('viewChoice').dispatchEvent(new Event('change'));
   check(el('left').querySelectorAll('.shape').length>1&&el('left').textContent.includes('height'),'front elevation replays without plan-only coordinates');

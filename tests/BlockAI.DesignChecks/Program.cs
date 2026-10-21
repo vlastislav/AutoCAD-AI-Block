@@ -144,8 +144,14 @@ var incompleteAgent=new DesignAgent(new OllamaClient(new HttpClient(new Handler(
 Check((await incompleteAgent.GenerateAsync(request,"test",null,null,null,default)).Attempts==2,"incomplete model output is repaired within the bounded attempt loop");
 var reviewCalls=0;
 var revised=new DesignAgent(new OllamaClient(new HttpClient(new Handler((_,_)=>Task.FromResult(++reviewCalls switch
-{1=>Reply(encoded),2=>Reply("{\"accepted\":false,\"issues\":[\"Backrest is visually disconnected.\"]}"),3=>Reply(encoded),_=>Reply("{\"accepted\":true,\"issues\":[]}")})))));
+{1=>Reply(encoded),2=>Reply("{\"accepted\":false,\"issues\":[\"Backrest is visually disconnected.\"]}"),3=>Reply(JsonSerializer.Serialize(plan with {Parts=[seat with {Shape="ellipse"},back,support with {X=.3,Y=.5,H=.4}]},BlockSpec.JsonOptions)),_=>Reply("{\"accepted\":true,\"issues\":[]}")})))));
 Check((await revised.GenerateAsync(request,"test","vision",PlanRenderer.Png,null,default)).Attempts==2&&reviewCalls==4,"visual feedback triggers another complete design pass");
+var duplicateCalls=0;
+var duplicateRecording=new DesignRecording{Prompt=request,Model="scripted",ReviewModel="scripted"};
+var duplicateAgent=new DesignAgent(new OllamaClient(new HttpClient(new Handler((_,_)=>Task.FromResult(++duplicateCalls==2?Reply("{\"accepted\":false,\"issues\":[\"Change the seat outline to an oval.\"]}"):Reply(JsonSerializer.Serialize(plan with {Name="RenamedDraft",Description="A different description"},BlockSpec.JsonOptions)))))));
+try{await duplicateAgent.GenerateAsync(request,"test","vision",PlanRenderer.Png,null,default,duplicateRecording);throw new Exception("Unchanged rejected geometry accepted");}
+catch(InvalidDataException){Check(duplicateCalls==4&&duplicateRecording.Events.Count(e=>e.Stage=="revision-unchanged")==2,"renaming a rejected draft does not count as editing visible geometry");}
+File.WriteAllText("artifacts-design/viewer-unchanged.json",duplicateRecording.ToJson());
 var endlessCalls=0;
 var endless=new DesignAgent(new OllamaClient(new HttpClient(new Handler((_,_)=>{endlessCalls++;return Task.FromResult(Reply(bad));}))));
 try{await endless.GenerateAsync(request,"test",null,null,null,default);throw new Exception("Unvalidated design returned");}
@@ -237,7 +243,9 @@ if(args.Contains("--live"))
         var liveReviewer=args.Contains("--no-review")?null:DesignAgent.DefaultModel;
         var liveRecording=new DesignRecording {Prompt=prompts[i],Model=liveModel,ReviewModel=liveReviewer};
         DesignResult generated;
-        try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default,liveRecording,args.Contains("--elevations"),PlanRenderer.Png);}
+        var liveReferences=args.Contains("--references")?ReferenceLibrary.Load(ReferenceLibrary.DefaultDirectory,out _).Match(prompts[i]):[];
+        if(args.Contains("--references"))Console.WriteLine("References: "+string.Join("; ",liveReferences.Select(r=>r.Analysis.Name)));
+        try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default,liveRecording,args.Contains("--elevations"),PlanRenderer.Png,liveReferences);}
         finally {liveRecording.TrySave("artifacts-design/live-recordings",out _,out _);}
         File.WriteAllText($"artifacts-design/design-{i+1}.json",JsonSerializer.Serialize(generated,BlockSpec.JsonOptions));
         File.WriteAllBytes($"artifacts-design/design-{i+1}.png",PlanRenderer.Png(generated.Block));

@@ -2,7 +2,22 @@
 
 The initial reference task is an inventory, not model training. A whole DWG collection is not one furniture example. Before using it as guidance, isolate an individual object, identify plan/front/side, establish scale, and pair views only when their identity is known. Block names and sheet positions alone do not establish a match.
 
-The desired later analysis output is semantic: part roles, relative proportions, connections, which surfaces hide others, visible vs inferred facts, and uncertainty. The generator should receive a few relevant design lessons and produce new geometry for the user's request, rather than inserting or tracing a source block. Reference retrieval/analysis is not yet integrated into the generation panel.
+The analysis output is semantic: part roles, relative proportions, connections, which surfaces hide others, visible vs inferred facts, and uncertainty. The generation panel now retrieves up to two reviewed matching studies. It sends their notes, rather than source coordinates or images, to the designer. This supplies context without training the model or tracing a source block.
+
+The local starter collection contains 13 named studies extracted from the supplied drawings. Ten have been visually curated and enabled; three ambiguous studies remain excluded. Initial model analyses sometimes misidentified the furniture, so approval is required before a new study is used. In **Reference library**, inspect the preview and notes, then use **Edit name / tags** to correct the name/category/tags and mark the study reviewed. Names aid retrieval but do not establish geometry or matching views.
+
+## Prepare and install studies
+
+`tools/BlockAI.ReferencePrepare` reads a private JSON manifest of candidates. Each candidate specifies `Source` (export JSON or PNG), `Group` (export group), optional `Name`, and optional normalized `Crop` rectangle `[x,y,width,height]`. Isolate one object before analysis. Run once with `--analyze` to create cached local vision analyses; inspect and correct their notes before approving them.
+
+```powershell
+.\.tools\dotnet\dotnet.exe run --project .\tools\BlockAI.ReferencePrepare -c Release -- --manifest artifacts-references/starter-manifest.json --library artifacts-references/prepared-library --analyze
+.\.tools\dotnet\dotnet.exe run --project .\tools\BlockAI.ReferencePrepare -c Release -- --install-from artifacts-references/prepared-library
+```
+
+The manifest and third-party assets stay private and are not included in a repository checkout. The installed library lives in `%LOCALAPPDATA%\BlockAI\References`. The palette can also analyze an isolated PNG/JPG using the selected local review model. New analyses start unapproved. Existing user metadata is preserved during installation unless `--force` is supplied. Reanalysis is cached by image hash, not performed on each generation.
+
+Enable **Use reference studies** in the palette. It displays selected study names or reports no match. Matching considers categories, names, tags, review status, confidence, and explicit no-cushion/no-arm constraints; it remains keyword based. Independent plan and elevation studies are not assumed to depict the same object. Replays retain selected semantic notes and provenance, not reference images. This small starter set cannot cover every request.
 
 ## Local DWG inventory tool
 

@@ -15,6 +15,7 @@
 <div id="empty"><h2>Open a saved generation recording</h2><p class="muted">Everything runs in this file. No AutoCAD, AI server or network connection is needed.</p></div>
 <div id="app" hidden>
 <section id="run"><div><div id="prompt"></div><p id="meta" class="muted"></p></div><div><span id="status" class="badge"></span></div></section>
+<section class="card pad" style="margin:0 28px 16px"><h2>Reference studies used</h2><div id="referenceNotes" class="muted" style="white-space:pre-wrap;overflow-wrap:anywhere"></div></section>
 <main class="shell">
 <aside class="card pad sidebar"><h2>Attempts</h2><div id="attempts"></div><h2 style="margin-top:20px">Recorded steps</h2><nav id="steps" aria-label="Recorded steps"></nav></aside>
 <section class="card">
@@ -32,8 +33,8 @@
 'use strict';
 const $=id=>document.getElementById(id), NS='http://www.w3.org/2000/svg';
 const state={run:null,attempt:1,index:0,part:null,timer:null,groups:new Map(),bounds:null,view:'plan',boundsByView:{}};
-const titles={'started':'Generation started','request':'Design requested','response':'Tool arguments received','proposal':'AI proposes parts','part-start':'Constructing a part','part-built':'Part constructed','assembled':'Assembly constructed','deduplicated':'Duplicate check','constraints-passed':'Construction checks passed','visibility-order':'Above / below order','front-elevation':'Front elevation','side-elevation':'Right side elevation','hidden-edges':'Hidden edges trimmed','fitted':'Fitted to requested dimensions','validation-failed':'Validation failed','review-start':'Visual review requested','review-response':'Reviewer response','review':'Visual feedback','review-skipped':'Visual review skipped','succeeded':'Design accepted','failed':'Generation failed','canceled':'Generation canceled'};
-const failure=e=>['validation-failed','failed','canceled'].includes(e.stage);
+const titles={'references':'Reference lessons selected','revision-unchanged':'Unchanged revision rejected','revision-changed':'Geometry revised','started':'Generation started','request':'Design requested','response':'Tool arguments received','proposal':'AI proposes parts','part-start':'Constructing a part','part-built':'Part constructed','assembled':'Assembly constructed','deduplicated':'Duplicate check','constraints-passed':'Construction checks passed','visibility-order':'Above / below order','front-elevation':'Front elevation','side-elevation':'Right side elevation','hidden-edges':'Hidden edges trimmed','fitted':'Fitted to requested dimensions','validation-failed':'Validation failed','review-start':'Visual review requested','review-response':'Reviewer response','review':'Visual feedback','review-skipped':'Visual review skipped','succeeded':'Design accepted','failed':'Generation failed','canceled':'Generation canceled'};
+const failure=e=>['validation-failed','failed','canceled','revision-unchanged'].includes(e.stage);
 function text(id,value){$(id).textContent=value??'';}
 function svgEl(tag,attrs={},content){const el=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))el.setAttribute(k,String(v));if(content!==undefined)el.textContent=content;return el;}
 function finite(n){return typeof n==='number'&&Number.isFinite(n)&&Math.abs(n)<=1e8;}
@@ -43,6 +44,7 @@ function validate(run){
  for(const e of run.events){if(!e||!Number.isInteger(e.attempt)||e.attempt<0||e.attempt>3||typeof e.stage!=='string'||typeof e.message!=='string'||!finite(e.elapsedMs))throw Error('Invalid recorded event.');
  if(e.plan&&(typeof e.plan!=='object'||(Array.isArray(e.plan.parts)&&e.plan.parts.length>24)))throw Error('Invalid proposed parts.');
  if(e.review&&(typeof e.review.accepted!=='boolean'||!Array.isArray(e.review.issues)||e.review.issues.length>8||!e.review.issues.every(i=>typeof i==='string')))throw Error('Invalid visual feedback.');
+ if(e.references&&(!Array.isArray(e.references)||e.references.length>2||!e.references.every(r=>r&&typeof r.sourceFile==='string'&&r.analysis&&typeof r.analysis.name==='string')))throw Error('Invalid reference usage record.');
  if(e.frame){if(!['normalized','mm'].includes(e.frame.units)||!Array.isArray(e.frame.geometry)||e.frame.geometry.length>500)throw Error('Invalid construction frame.');
  if(e.frame.view&&!['plan','front','side'].includes(e.frame.view))throw Error('Invalid drawing view.');
  if(e.frame.fit&&!['minX','minY','scaleX','scaleY'].every(k=>finite(e.frame.fit[k])))throw Error('Invalid fitting transform.');
@@ -93,6 +95,8 @@ function draw(id,n,index){
  if(failure(e))svg.append(svgEl('rect',{x:2,y:2,width:596,height:596,rx:8,fill:'none',stroke:'#ff8b8f','stroke-width':3,'pointer-events':'none'}));
 }
 function inspect(snap){
+ const refEvent=state.run.events.find(e=>e.references&&e.elapsedMs<=snap.event.elapsedMs);
+ text('referenceNotes',refEvent?(refEvent.references.length?refEvent.references.map(r=>`${r.analysis.name} · ${r.analysis.category} · ${r.analysis.view}\nSource: ${r.sourceFile} / ${r.sourceGroup}\nModel: ${r.model}; reviewed: ${r.approved===true}`).join('\n\n'):'No matching reference analyses used in this run.'):'No reference usage recorded at this step.');
  const plan=events().slice(0,state.index+1).find(e=>e.plan)?.plan,parts=partList(plan);$('parts').replaceChildren();parts.forEach((p,i)=>{const b=document.createElement('button');b.className='part'+(i===state.part?' active':'');b.textContent=`${i+1}. ${p?.role||'Unnamed'} · ${p?.shape||'unknown'}`;b.onclick=()=>{state.part=i;render();};$('parts').append(b);});
  const p=parts[state.part];$('parameters').hidden=!p;text('parameters',p?JSON.stringify(p,null,2):'');
  if(p){const gs=snap.geometry.filter(g=>g.partId===state.part);const pts=gs.flatMap(g=>pointsOf(mapped(g,state.attempt,snap.units)));text('partInfo',pts.length?`${gs.length} visible outline(s) at this step. Bounds: X ${Math.min(...pts.map(q=>q.x)).toFixed(1)}–${Math.max(...pts.map(q=>q.x)).toFixed(1)}, Y ${Math.min(...pts.map(q=>q.y)).toFixed(1)}–${Math.max(...pts.map(q=>q.y)).toFixed(1)} mm.`:'This part has not been constructed at this step, or was hidden/removed.');text('connections',p.from||p.to?`Requested connection: ${p.from||'?'} → ${p.to||'?'}. See its “Part constructed” event for resolved placement.`:'No explicit attachment requested.');}

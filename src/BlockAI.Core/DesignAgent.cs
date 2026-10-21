@@ -10,7 +10,7 @@ public sealed class DesignAgent(OllamaClient client)
     public const string DefaultModel="qwen3.5:4b";
     public async Task<DesignResult> GenerateAsync(string prompt,string model,string? reviewModel,
         Func<BlockSpec,byte[]>? render,IProgress<string>? progress,CancellationToken cancellation,DesignRecording? recording=null,
-        bool elevations=false,Func<DesignViews,byte[]>? renderViews=null)
+        bool elevations=false,Func<DesignViews,byte[]>? renderViews=null,IReadOnlyList<ReferenceLesson>? references=null)
     {
         var currentAttempt=0;
         try
@@ -18,24 +18,32 @@ public sealed class DesignAgent(OllamaClient client)
         recording?.Add(0,"started","Local part-based generation started.");
         if(string.IsNullOrWhiteSpace(prompt)||prompt.Length>4000) throw new ArgumentException("Use a description of 1–4000 characters.");
         if(reviewModel is not null&&render is null) throw new ArgumentException("Visual review requires a preview renderer.");
+        var selected=references?.Where(r=>r.Approved).Take(2).ToArray()??[];
+        foreach(var lesson in selected)lesson.Validate();
+        recording?.Add(0,"references",selected.Length==0?"No matching reference lessons supplied; generation uses the request and drawing tools.":"Reference analysis used: "+string.Join("; ",selected.Select(r=>r.Analysis.Name)),references:selected);
+        var referenceContext=ReferenceLibrary.Context(selected);
         var feedback="";
         var previous="";
+        string? rejectedGeometry=null;
+        var visualCorrections="";
         for(var attempt=1;attempt<=3;attempt++)
         {
             currentAttempt=attempt;
             cancellation.ThrowIfCancellationRequested();
             recording?.Add(attempt,"request",feedback.Length==0?"Requesting a part-based plan.":"Required corrections: "+feedback);
             progress?.Report(attempt==1?"Designing parts and their arrangement…":$"Revising design ({attempt}/3): {feedback}");
-            var input=prompt;
+            var input=prompt+referenceContext;
             if(previous.Length>0) input+="\nPrevious plan:\n"+previous+"\nRequired corrections:\n"+feedback;
             else if(feedback.Length>0)input+="\nRequired corrections:\n"+feedback;
             try
             {
-                previous=await client.ToolJsonAsync(model,DesignPlan.Instructions+"\n"+(elevations?DesignPlan.ElevationInstructions+"\n"+DesignPlan.ElevationExample:DesignPlan.WorkedExample),input,DesignPlan.SchemaFor(elevations),null,cancellation);
+                var guidance=attempt==1?(elevations?DesignPlan.ElevationInstructions+"\n"+DesignPlan.ElevationExample:DesignPlan.WorkedExample)
+                    :(elevations?DesignPlan.ElevationInstructions+"\n":"")+"REVISE the previous assembly using the specific feedback. Change the named geometry/placement/depth or dimensions; renaming or rewriting the description is not a revision. Preserve parts that already satisfy the request. Do not restart from the worked example.";
+                previous=await client.ToolJsonAsync(model,DesignPlan.Instructions+"\n"+guidance,input,DesignPlan.SchemaFor(elevations),null,cancellation);
             }
             catch(InvalidDataException ex) when(ex.Message.Contains("incomplete",StringComparison.OrdinalIgnoreCase))
             {
-                feedback="The previous response exceeded the output limit. Return a complete compact plan with at most 6 meaningful part definitions; use mirror/repetition and omit unrequested details.";
+                feedback="The previous response exceeded the output limit. Return a complete compact plan with at most 6 meaningful part definitions; use mirror/repetition and omit unrequested details. "+visualCorrections;
                 recording?.Add(attempt,"validation-failed",ex.Message+" "+feedback);
                 previous="";continue;
             }
@@ -53,7 +61,14 @@ public sealed class DesignAgent(OllamaClient client)
                 else block=plan.Build(prompt,observe);
             }
             catch(Exception ex) when(ex is JsonException or InvalidDataException)
-            {feedback=ex.Message;recording?.Add(attempt,"validation-failed",feedback);continue;}
+            {feedback=ex.Message+" "+visualCorrections;recording?.Add(attempt,"validation-failed",feedback);continue;}
+            var geometryFingerprint=GeometryFingerprint(block,views?.Front,views?.Side);
+            if(rejectedGeometry==geometryFingerprint)
+            {
+                feedback=visualCorrections+" The revised output has the same visible geometry (within 2 mm) as the rejected draft. Change the requested parts, shape, proportions, placement or depth. Changing names, descriptions or part order does not count.";
+                recording?.Add(attempt,"revision-unchanged",feedback);continue;
+            }
+            if(rejectedGeometry is not null)recording?.Add(attempt,"revision-changed","Visible geometry differs from the previously rejected draft; the new drawing will be reviewed again.");
             if(reviewModel is not null)
             {
                 var allViewsReviewed=views is not null&&renderViews is not null;
@@ -74,7 +89,7 @@ public sealed class DesignAgent(OllamaClient client)
                     throw new InvalidDataException("The visual reviewer returned invalid feedback.");
                 recording?.Add(attempt,"review",review.Accepted&&review.Issues.Length==0?"Reviewer approved the preview (subjective).":"Reviewer requested corrections.",review:review);
                 if(!review.Accepted||review.Issues.Length>0)
-                {feedback="Visual review: "+(review.Issues.Length==0?"Design not approved. Improve recognition and proportions.":string.Join("; ",review.Issues));continue;}
+                {visualCorrections="Visual review: "+(review.Issues.Length==0?"Design not approved. Improve recognition and proportions.":string.Join("; ",review.Issues));feedback=visualCorrections;rejectedGeometry=geometryFingerprint;continue;}
             }
             block=block with {Assumptions=block.Assumptions.Concat(new[]{
                 $"Design attempts: {attempt}. "+(reviewModel is null?"Visual review disabled; appearance has not been reviewed by AI.":$"Preview reviewed by {reviewModel}. This is subjective feedback, not an accuracy guarantee.")}).ToArray()};
@@ -88,6 +103,28 @@ public sealed class DesignAgent(OllamaClient client)
         {recording?.Finish("canceled","Generation canceled or timed out; no new design offered for insertion.",currentAttempt);throw;}
         catch(Exception ex)
         {recording?.Finish("failed",ex.Message,currentAttempt);throw;}
+    }
+
+    // Compare visible edges, independent of descriptions, entity order and polyline direction.
+    private static string GeometryFingerprint(params BlockSpec?[] drawings)
+    {
+        string Point(Point2 p)=>FormattableString.Invariant($"{Math.Round(p.X/2)},{Math.Round(p.Y/2)}");
+        var views=new List<string>();
+        foreach(var drawing in drawings)
+        {
+            var edges=new HashSet<string>(StringComparer.Ordinal);
+            if(drawing is not null)foreach(var entity in drawing.Entities)
+            {
+                if(entity.Kind=="circle") {edges.Add("circle:"+Point(entity.Center)+":"+Math.Round(entity.Radius/2));continue;}
+                for(var i=0;i<entity.Points.Length-(entity.Closed?0:1);i++)
+                {
+                    var a=Point(entity.Points[i]);var b=Point(entity.Points[(i+1)%entity.Points.Length]);
+                    if(a!=b)edges.Add(string.CompareOrdinal(a,b)<=0?a+">"+b:b+">"+a);
+                }
+            }
+            views.Add(string.Join(";",edges.OrderBy(e=>e,StringComparer.Ordinal)));
+        }
+        return string.Join("|",views);
     }
 
     public const string ReviewInstructions="""

@@ -15,6 +15,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Plugin build failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Core checks failed.' }
 & $dotnetCommand run --project "$projectRoot\tests\BlockAI.DesignChecks\BlockAI.DesignChecks.csproj" -c Release
 if ($LASTEXITCODE -ne 0) { throw 'Design loop checks failed.' }
+& $dotnetCommand run --project "$projectRoot\tests\BlockAI.ReferenceChecks\BlockAI.ReferenceChecks.csproj" -c Release
+if($LASTEXITCODE -ne 0){throw 'Reference checks failed.'}
 if($CheckViewer){
     & powershell -NoProfile -ExecutionPolicy Bypass -File "$projectRoot\scripts\check-viewer.ps1"
     if($LASTEXITCODE -ne 0){throw 'Viewer browser checks failed.'}

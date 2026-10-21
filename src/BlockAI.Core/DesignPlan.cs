@@ -180,7 +180,10 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
                 }
             }
             if(Enumerable.Range(0,built.Count).Any(i=>built[i].Role is "back" or "backrest"&&!reachable.Contains(i)))
-                throw new InvalidDataException("Backrest is disconnected from the actual seat outline. Supports must overlap the actual seat and backrest geometry, not just their boxes. For an oval seat, extend supports forward into the ellipse (lower their y) so the curved seat connects to them.");
+            {
+                var seatBox=Bounds(seats[0].Geometry);var backBox=Bounds(backs[0].Geometry);
+                throw new InvalidDataException(FormattableString.Invariant($"Backrest is disconnected from the actual seat outline. Actual seat bounds: x={seatBox.X:0.###}, y={seatBox.Y:0.###}, w={seatBox.W:0.###}, h={seatBox.H:0.###}; backrest bounds: x={backBox.X:0.###}, y={backBox.Y:0.###}, w={backBox.W:0.###}, h={backBox.H:0.###}. Preserve the seat and backrest. Edit an existing rectangular rear support/post to use from=\"{seats[0].Role}\", to=\"{backs[0].Role}\", repeat=\"none\", align=\"none\", mirror=true. Choose x and w inside both anchors' horizontal span; the attachment tool computes the actual connecting y/h. Do not just move a tiny post closer or claim connection in the description. Supports must overlap the actual seat and backrest geometry, not just their boxes. For an oval seat, extend supports into the curved outline."));
+            }
             var isolated=Enumerable.Range(0,built.Count).FirstOrDefault(i=>built[i].Role.Contains("support")&&!reachable.Contains(i),-1);
             if(isolated>=0)
             {
