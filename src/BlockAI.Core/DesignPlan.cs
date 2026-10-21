@@ -6,14 +6,19 @@ namespace BlockAI.Core;
 
 public sealed record DesignPart(string Role, string Shape, double X, double Y, double W, double H,
     double Detail, int Count, string Repeat, double Gap, bool Mirror, string Align, double Inset, Point2[] Points,
-    string From="",string To="");
+    string From="",string To="",int? Level=null,bool Opaque=true,double? Z=null,double? Height=null)
+{
+    // Older recordings omitted levels. Keep their existing support-under-surface convention.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int EffectiveLevel=>Level??(Role.ToLowerInvariant() switch {"back" or "backrest"=>20,var r when r.Contains("support")||r.Contains("leg")=>0,_=>10});
+}
 
-public sealed record DesignPlan(string Name, string Description, double Width, double Depth, DesignPart[] Parts)
+public sealed record DesignPlan(string Name, string Description, double Width, double Depth, DesignPart[] Parts,double Height=800)
 {
     public static DesignPlan Parse(string json) => JsonSerializer.Deserialize<DesignPlan>(json, BlockSpec.JsonOptions)
         ?? throw new InvalidDataException("The model returned no design plan.");
 
-    public BlockSpec Build(string prompt,Action<ConstructionFrame>? observe=null)
+    public BlockSpec Build(string prompt,Action<ConstructionFrame>? observe=null,bool useVerticalDepth=false)
     {
         var origins=new Dictionary<Primitive,int>();
         var built=new List<(string Role,Primitive Geometry)>();
@@ -32,6 +37,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
         if(!double.IsFinite(width)||!double.IsFinite(depth)||width<100||depth<100||width>10000||depth>10000)
             throw new InvalidDataException("Specify an overall size between 100 and 10000 mm on each axis.");
         if(Parts is null||Parts.Length is <2 or >24) throw new InvalidDataException("Use 2–24 meaningful parts.");
+        (double Surface,int Level) TopDepth(DesignPart p)=> (useVerticalDepth?(p.Z??0)+(p.Height??0):0,p.EffectiveLevel);
         var noCushions=Regex.IsMatch(prompt,@"\b(?:no|without)\s+(?:(?:a|any|seat)\s+)?(?:cushions?|cushioning|upholstery|padding)|\b(?:uncushioned|unupholstered)\b",RegexOptions.IgnoreCase);
         var noArms=Regex.IsMatch(prompt,@"\barmless\b|\b(?:no|without)\s+(?:arms|armrests?)\b",RegexOptions.IgnoreCase);
         var chair=Regex.IsMatch(prompt,@"\b(?:chair|armchair)\b",RegexOptions.IgnoreCase);
@@ -42,6 +48,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             var localOutlines=new HashSet<string>();
             if(part is null||string.IsNullOrWhiteSpace(part.Role)||part.Role.Length>60||part.Points is null)
                 throw new InvalidDataException("Every part needs a role and a points array.");
+            if(part.Level is < -100 or >100)throw new InvalidDataException("Part level must be between -100 and 100; higher levels are closer to the top-view camera.");
             var role=part.Role.ToLowerInvariant();
             if(noCushions&&Regex.IsMatch(role,"cushion|upholster|pad|pillow")) throw new InvalidDataException("The request forbids cushions/padding. Remove those parts.");
             if(noCushions&&role.Contains("seat")&&part.Inset>0) throw new InvalidDataException("No cushion means no inner seat pad/seam outline. Set seat inset=0.");
@@ -122,15 +129,16 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             throw new InvalidDataException("A chair plan must include separate seat and backrest roles.");
         static (double X,double Y,double W,double H) Bounds(Primitive p)
         {var x=p.Points.Min(p=>p.X);var y=p.Points.Min(p=>p.Y);return(x,y,p.Points.Max(p=>p.X)-x,p.Points.Max(p=>p.Y)-y);}
-        var signatures=new Dictionary<string,string>();
+        var signatures=new Dictionary<(string Outline,(double,int) Depth),string>();
         var uniqueBuilt=new List<(string Role,Primitive Geometry)>();
         foreach(var item in built)
         {
             var signature=string.Join(";",item.Geometry.Points.Select(p=>FormattableString.Invariant($"{p.X:F6},{p.Y:F6}")).OrderBy(v=>v,StringComparer.Ordinal));
-            if(!signatures.TryAdd(signature,item.Role))
+            var key=(signature,TopDepth(Parts[origins[item.Geometry]]));
+            if(!signatures.TryAdd(key,item.Role))
             {
-                if(signatures[signature]==item.Role) continue;
-                throw new InvalidDataException($"Parts '{signatures[signature]}' and '{item.Role}' duplicate the same outline. Remove one of these parts.");
+                if(signatures[key]==item.Role) continue;
+                throw new InvalidDataException($"Parts '{signatures[key]}' and '{item.Role}' duplicate the same outline at the same level. Remove one or assign the intended above/below levels.");
             }
             uniqueBuilt.Add(item);
         }
@@ -152,13 +160,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
         {
             var seatBox=Bounds(seats[0].Geometry);var backBox=Bounds(backs[0].Geometry);
             if(seatBox.H<.35||backBox.H>.4||backBox.Y+backBox.H/2<=seatBox.Y+seatBox.H/2)
-                throw new InvalidDataException(FormattableString.Invariant($"Wrong plan-view proportions: seat y={seatBox.Y:0.###}, h={seatBox.H:0.###}; backrest y={backBox.Y:0.###}, h={backBox.H:0.###}. Set seat h>=0.35, backrest h<=0.4 and backrest y>=seat.y+seat.h. A seat is a broad horizontal surface in TOP view; do not copy front-elevation coordinates."));
-        }
-        foreach(var a in seats) foreach(var b in backs)
-        {
-            var ab=Bounds(a.Geometry);var bb=Bounds(b.Geometry);
-            var overlap=Math.Max(0,Math.Min(ab.X+ab.W,bb.X+bb.W)-Math.Max(ab.X,bb.X))*Math.Max(0,Math.Min(ab.Y+ab.H,bb.Y+bb.H)-Math.Max(ab.Y,bb.Y));
-            if(overlap>Math.Min(ab.W*ab.H,bb.W*bb.H)*.03) throw new InvalidDataException("Seat and backrest overlap in plan. Separate their boxes.");
+                throw new InvalidDataException(FormattableString.Invariant($"Wrong plan-view proportions: seat y={seatBox.Y:0.###}, h={seatBox.H:0.###}; backrest y={backBox.Y:0.###}, h={backBox.H:0.###}. Set seat h>=0.35, backrest h<=0.4 and keep the backrest center behind the seat center. Intentional projection overlap is allowed. A seat is a broad horizontal surface in TOP view; do not copy front-elevation coordinates."));
         }
         if(chair&&seats.Length>0&&backs.Length>0)
         {
@@ -190,24 +192,26 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
         var minX=all.Min(p=>p.X);var minY=all.Min(p=>p.Y);var spanX=all.Max(p=>p.X)-minX;var spanY=all.Max(p=>p.Y)-minY;
         if(spanX<.1||spanY<.1) throw new InvalidDataException("The design has degenerate overall extents.");
         Emit("constraints-passed","Construction constraints passed. This does not prove visual accuracy.");
-        if(chair)
         {
-            // Rear supports lie below opaque seat/back surfaces in plan. Remove their hidden
-            // segments mathematically, rather than asking the model to trace intersections.
-            var opaque=built.Where(b=>b.Role is "seat" or "back" or "backrest").Select(b=>b.Geometry).Where(p=>p.Closed).ToArray();
+            // Visibility is based on declared depth, never XY position or list order.
+            var untrimmed=built.ToArray();
+            Emit("visibility-order","Top-view depth (higher is closer): "+string.Join("; ",Parts.Select((p,i)=>$"{i+1} {p.Role}: "+(useVerticalDepth?$"top Z={(p.Z??0)+(p.Height??0):0.##} mm, ":"")+$"level {p.EffectiveLevel}, opaque={p.Opaque}")));
             var visible=new List<(string Role,Primitive Geometry)>();
             foreach(var item in built)
             {
-                foreach(var g in item.Role.Contains("support")?VisibleSegments(item.Geometry,opaque):new[]{item.Geometry})
-                {origins[g]=origins.GetValueOrDefault(item.Geometry,-1);visible.Add((item.Role,g));}
+                var id=origins[item.Geometry];var part=Parts[id];
+                var opaque=untrimmed.Where(b=>origins[b.Geometry]!=id&&TopDepth(Parts[origins[b.Geometry]]).CompareTo(TopDepth(part))>0&&Parts[origins[b.Geometry]].Opaque&&b.Geometry.Closed).Select(b=>b.Geometry).ToArray();
+                var result=opaque.Length==0?new[]{item.Geometry}:VisibleSegments(item.Geometry,opaque).ToArray();
+                foreach(var g in result)
+                {origins[g]=id;visible.Add((item.Role,g));}
             }
             built=visible;
-            Emit("hidden-edges","Clipped support edges beneath opaque seat/back surfaces.");
+            Emit("hidden-edges",$"Trimmed lower-level lines beneath higher opaque surfaces. {untrimmed.Length} original outlines → {built.Count} visible outlines. Equal levels do not hide each other; open paths and nonopaque parts do not mask surfaces.");
         }
         var geometry=built.Select(b=>b.Geometry with {Points=b.Geometry.Points.Select(p=>new Point2((p.X-minX)*width/spanX,(p.Y-minY)*depth/spanY)).ToArray()}).ToArray();
         var spec=new BlockSpec(Name,Description,["AI composed this design from geometric tools; no furniture template was selected.",
             $"Overall footprint fitted to {width:0.##} × {depth:0.##} mm. Parts: {string.Join(", ",Parts.Select(p=>p.Role).Distinct())}.",
-            "Checked: finite geometry, footprint, duplicates, declared negative constraints, and seat/back separation. Visual recognition is a separate review."],geometry);
+            "Checked: finite geometry, footprint, same-level duplicates, declared negative constraints, connectivity and depth-based hidden lines. Visual recognition is a separate review."],geometry);
         spec.Validate();
         if(observe is not null)
         {
@@ -251,21 +255,45 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
                 Math.Min(Math.Min(Distance(e.A,f.A,f.B),Distance(e.B,f.A,f.B)),Math.Min(Distance(f.A,e.A,e.B),Distance(f.B,e.A,e.B)))<.003)return true;
         return false;
     }
-    private static IEnumerable<Primitive> VisibleSegments(Primitive part,Primitive[] opaque)
+    internal static IEnumerable<Primitive> VisibleSegments(Primitive part,Primitive[] opaque)
     {
+        var visible=new List<(Point2 A,Point2 B)>();
+        var changed=false;
         foreach(var (a,b) in Edges(part))
         {
             var cuts=new List<double>{0,1};
             foreach(var surface in opaque)foreach(var edge in Edges(surface))
+            {
                 if(Intersection(a,b,edge.A,edge.B) is double t)cuts.Add(t);
+                else
+                {
+                    // Split coincident boundaries too, so a higher surface owns their shared edge.
+                    var delta=Sub(b,a);var length=delta.X*delta.X+delta.Y*delta.Y;
+                    if(length>1e-16&&Math.Abs(Cross(delta,Sub(edge.A,a)))<1e-10&&Math.Abs(Cross(delta,Sub(edge.B,a)))<1e-10)
+                        foreach(var p in new[]{edge.A,edge.B})cuts.Add(Math.Clamp(((p.X-a.X)*delta.X+(p.Y-a.Y)*delta.Y)/length,0,1));
+                }
+            }
             var sorted=cuts.Distinct().OrderBy(t=>t).ToArray();
             Point2 At(double t)=>new(a.X+(b.X-a.X)*t,a.Y+(b.Y-a.Y)*t);
             for(var i=1;i<sorted.Length;i++)
             {
-                if(sorted[i]-sorted[i-1]<1e-8||opaque.Any(p=>Inside(At((sorted[i]+sorted[i-1])/2),p)))continue;
-                yield return new("polyline",[At(sorted[i-1]),At(sorted[i])],new(0,0),0,false);
+                if(sorted[i]-sorted[i-1]<1e-8)continue;
+                var midpoint=At((sorted[i]+sorted[i-1])/2);
+                if(opaque.Any(p=>Inside(midpoint,p)||Edges(p).Any(e=>Distance(midpoint,e.A,e.B)<1e-9))) {changed=true;continue;}
+                visible.Add((At(sorted[i-1]),At(sorted[i])));
             }
         }
+        if(!changed){yield return part;yield break;}
+        var chains=new List<List<Point2>>();
+        bool Same(Point2 a,Point2 b)=>Math.Abs(a.X-b.X)<1e-9&&Math.Abs(a.Y-b.Y)<1e-9;
+        foreach(var edge in visible)
+        {
+            if(chains.Count>0&&Same(chains[^1][^1],edge.A))chains[^1].Add(edge.B);
+            else chains.Add([edge.A,edge.B]);
+        }
+        if(part.Closed&&chains.Count>1&&Same(chains[^1][^1],chains[0][0]))
+        {var joined=chains[^1];joined.AddRange(chains[0].Skip(1));chains[0]=joined;chains.RemoveAt(chains.Count-1);}
+        foreach(var points in chains)yield return new("polyline",points.ToArray(),new(0,0),0,false);
     }
 
     private static Point2[] ShapePoints(DesignPart p)
@@ -298,7 +326,15 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     Choose the parts, shapes, proportions, positions and arrangement to satisfy the specific request.
     Return COMPACT JSON only. Name/description explain actual design choices. Overall width/depth are millimeters.
     Parts use NORMALIZED overall coordinates: x,y,w,h within 0..1. +Y is the back/top of the plan, +X right.
-    Each part has role, shape, x,y,w,h,detail,count,repeat,gap,mirror,align,inset,points,from,to.
+    Each part has role, shape, x,y,w,h,detail,count,repeat,gap,mirror,align,inset,points,from,to,level,opaque.
+    TOP-VIEW VISIBILITY: level is a relative depth order (-100..100), not millimeters. Higher means closer to the overhead camera.
+    opaque=true means a CLOSED outline is a filled surface which hides lower-level lines. opaque=false means linework only.
+    Open paths/curves never mask geometry. Equal levels do not hide each other; use distinct levels when one surface covers another.
+    Choose depth from the object's construction, not its XY position or the order parts appear in JSON.
+    Example: supports/legs level=0, seat/tabletop level=10, back rail/armrests level=20, pad on seat level=30.
+    Interior seams/engraving can use opaque=false at a higher level than their surface. A slat is its own solid surface; spaces between slats stay empty.
+    INTENTIONAL OVERLAP IS NORMAL. Draw whole parts; the engine trims hidden lower-level lines at actual outline intersections.
+    Do not separate parts just to avoid overlap. Do not pre-trim away construction that is needed to connect them.
     Roles describe physical purpose: seat, backrest, support, armrest, cushion, frame, tabletop, etc.
     Tools: rectangle; rounded (detail=corner fraction .02..0.3); trapezoid (detail=top inset fraction);
     ellipse; path (open local points); polygon (closed local points); curve (3 local points for quadratic Bezier).
@@ -316,7 +352,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     All other parts set from="",to="". Anchors must have unique roles and may not themselves be linked or repeated.
     Use 3-10 purposeful parts, not decorative clutter. No duplicate outlines. Keep all parts inside the design box.
     Keep a plain request plain. Do not invent slats or extra exposed legs unless requested. A simple chair can use three part definitions: seat, backrest, mirrored support.
-    In a chair plan, SEAT and BACKREST are separate and MUST NOT OVERLAP. Supports may touch/connect them.
+    In a chair plan, SEAT and BACKREST are separate parts. They may overlap in projection; declare which is above using level.
     Camera looks STRAIGHT DOWN. The seat is a broad shape taking 55-80% of depth. The backrest is a THIN band
     behind the seat toward +Y, typically 5-20% of depth, NOT a tall rectangular panel below the seat.
     Legs directly under an opaque seat are hidden in plan and should be omitted, not drawn as a front elevation.
@@ -338,14 +374,52 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     {"type":"object","additionalProperties":false,"required":["name","description","width","depth","parts"],"properties":{
     "name":{"type":"string"},"description":{"type":"string"},"width":{"type":"number"},"depth":{"type":"number"},
     "parts":{"type":"array","minItems":2,"maxItems":24,"items":{"type":"object","additionalProperties":false,
-    "required":["role","shape","x","y","w","h","detail","count","repeat","gap","mirror","align","inset","points","from","to"],"properties":{
+    "required":["role","shape","x","y","w","h","detail","count","repeat","gap","mirror","align","inset","points","from","to","level","opaque"],"properties":{
     "role":{"type":"string"},"shape":{"type":"string","enum":["rectangle","rounded","trapezoid","ellipse","path","polygon","curve"]},
     "x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"detail":{"type":"number"},
     "count":{"type":"integer","minimum":1,"maximum":8},"repeat":{"type":"string","enum":["none","row","column"]},
     "gap":{"type":"number"},"mirror":{"type":"boolean"},"align":{"type":"string","enum":["none","center","left","right"]},"inset":{"type":"number"},
     "from":{"type":"string"},"to":{"type":"string"},
+    "level":{"type":"integer","minimum":-100,"maximum":100},"opaque":{"type":"boolean"},
     "points":{"type":"array","maxItems":32,"items":{"type":"object","required":["x","y"],"additionalProperties":false,"properties":{"x":{"type":"number"},"y":{"type":"number"}}}}
     }}}}}
+    """;
+
+    public static string SchemaFor(bool elevations)=>!elevations?Schema:Schema
+        .Replace("\"maxItems\":24","\"maxItems\":12")
+        .Replace("\"width\",\"depth\",\"parts\"","\"width\",\"depth\",\"height\",\"parts\"")
+        .Replace("\"depth\":{\"type\":\"number\"},","\"depth\":{\"type\":\"number\"},\"height\":{\"type\":\"number\",\"minimum\":100,\"maximum\":5000},")
+        .Replace("\"level\",\"opaque\"]","\"level\",\"opaque\",\"z\",\"height\"]")
+        .Replace("\"opaque\":{\"type\":\"boolean\"},","\"opaque\":{\"type\":\"boolean\"},\"z\":{\"type\":\"number\",\"minimum\":0},\"height\":{\"type\":\"number\",\"exclusiveMinimum\":0},");
+
+    public const string ElevationInstructions="""
+    ALSO GENERATE MATCHING FRONT AND RIGHT-SIDE ELEVATIONS from ONE shared assembly.
+    Overall width,depth,height are millimeters. The plan coordinates remain normalized X/Y.
+    Every part MUST specify z (bottom above floor in mm) and height (vertical thickness/height in mm).
+    z>=0, height>0, z+height<=overall height. At least one part reaches overall height and one starts at floor z=0.
+    INCLUDE legs, posts, panels and bases needed for elevations, even when they are hidden under a seat in plan.
+    Override the earlier top-view-only instruction to omit hidden legs. The renderer hides them in plan automatically.
+    Use closed solid outlines. Each plan footprint is extruded vertically between z and z+height.
+    Example chair: four legs z=0,height=430; seat z=430,height=40; rear posts z=0,height=800; back rail z=700,height=100; overall height=800.
+    Decide real construction dimensions for THIS request, not a front elevation drawn into the normalized plan box.
+    Front projects X/Z looking from -Y; right side projects Y/Z looking from +X. Elevations are derived, not independently invented.
+    These tools make vertical extrusions; do not claim sloping legs or curved elevation profiles that they cannot represent.
+    Top-view visibility uses actual top Z first and level as a tie-breaker. Equal depths do not hide each other.
+    The worked example above only teaches plan tools. Add your own complete vertical dimensions and floor supports.
+    Keep this request SIMPLE: 3–8 part definitions, never more than 12. Use mirror/repetition instead of many repeated definitions.
+    Do not add decorative crossbars/slats unless explicitly requested. For a plain chair, a seat, thin rear rail, front leg pair and rear post pair are sufficient.
+    A leg is slender in BOTH plan axes: normally w=.04..0.12, h=.04..0.12. Never make its plan h=.8: that is a rail, not a leg.
+    Rear posts can touch both seat and rear rail in plan; rear posts extend to overall height, front legs stop at seat underside.
+    """;
+
+    public const string ElevationExample="""
+    WORKED TOOL EXAMPLE ONLY: one coherent chair assembly, not a block to select. Adapt parts and proportions to the actual request.
+    A broad seat, rear rail and two mirrored pairs of vertical members. Rear rail overlaps the seat in plan; its higher top surface hides the seat edge.
+    {"name":"AssemblyExample","description":"Plain chair with a solid seat, rear rail and four posts","width":500,"depth":550,"height":800,"parts":[
+    {"role":"seat","shape":"trapezoid","x":0.1,"y":0.08,"w":0.8,"h":0.72,"detail":0.06,"count":1,"repeat":"none","gap":0,"mirror":false,"align":"none","inset":0,"points":[],"from":"","to":"","level":10,"opaque":true,"z":430,"height":40},
+    {"role":"backrest","shape":"rounded","x":0.05,"y":0.76,"w":0.9,"h":0.12,"detail":0.08,"count":1,"repeat":"none","gap":0,"mirror":false,"align":"none","inset":0,"points":[],"from":"","to":"","level":20,"opaque":true,"z":700,"height":100},
+    {"role":"front_legs","shape":"rectangle","x":0.14,"y":0.13,"w":0.06,"h":0.06,"detail":0,"count":1,"repeat":"none","gap":0,"mirror":true,"align":"none","inset":0,"points":[],"from":"","to":"","level":0,"opaque":true,"z":0,"height":430},
+    {"role":"rear_posts","shape":"rectangle","x":0.14,"y":0.76,"w":0.06,"h":0.06,"detail":0,"count":1,"repeat":"none","gap":0,"mirror":true,"align":"none","inset":0,"points":[],"from":"","to":"","level":0,"opaque":true,"z":0,"height":800}]}
     """;
 
     public const string WorkedExample="""
@@ -355,8 +429,8 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     Change tools/parts/positions for the actual request: oval seat needs ellipse; slatted back needs repeated back_slat parts.
     Do not copy this description or claim this is the only chair design. It demonstrates coordinates and tool semantics.
     {"name":"ExampleOnly","description":"Tapered seat, plain rear rail and paired rear supports","width":500,"depth":550,"parts":[
-    {"role":"seat","shape":"trapezoid","x":0.12,"y":0,"w":0.76,"h":0.68,"detail":0.12,"count":1,"repeat":"none","gap":0,"mirror":false,"align":"center","inset":0,"points":[],"from":"","to":""},
-    {"role":"backrest","shape":"rounded","x":0,"y":0.86,"w":1,"h":0.14,"detail":0.12,"count":1,"repeat":"none","gap":0,"mirror":false,"align":"center","inset":0,"points":[],"from":"","to":""},
-    {"role":"support","shape":"rectangle","x":0.2,"y":0.62,"w":0.045,"h":0.3,"detail":0,"count":1,"repeat":"none","gap":0,"mirror":true,"align":"none","inset":0,"points":[],"from":"seat","to":"backrest"}]}
+    {"role":"seat","shape":"trapezoid","x":0.12,"y":0,"w":0.76,"h":0.68,"detail":0.12,"count":1,"repeat":"none","gap":0,"mirror":false,"align":"center","inset":0,"points":[],"from":"","to":"","level":10,"opaque":true},
+    {"role":"backrest","shape":"rounded","x":0,"y":0.86,"w":1,"h":0.14,"detail":0.12,"count":1,"repeat":"none","gap":0,"mirror":false,"align":"center","inset":0,"points":[],"from":"","to":"","level":20,"opaque":true},
+    {"role":"support","shape":"rectangle","x":0.2,"y":0.62,"w":0.045,"h":0.3,"detail":0,"count":1,"repeat":"none","gap":0,"mirror":true,"align":"none","inset":0,"points":[],"from":"seat","to":"backrest","level":0,"opaque":true}]}
     """;
 }

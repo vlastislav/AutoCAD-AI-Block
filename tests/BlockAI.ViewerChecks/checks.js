@@ -16,9 +16,10 @@
   check(rail(el('left'))===rail(el('right')),'identical back rails retain identical screen coordinates between attempts');
   el('parts').children[2].click();
   check(el('parameters').textContent.includes('"from": "seat"')&&el('connections').textContent.includes('seat → backrest'),'part inspector exposes parameters and attachment roles');
+  check(el('depthOrder').textContent.includes('Top-view level:'),'part inspector explains above/below order');
   el('attempts').children[1].click();
   el('scrub').value=el('scrub').max;el('scrub').dispatchEvent(new Event('input'));
-  check(el('stageTitle').textContent==='Validation failed'&&el('issue').textContent.includes('overlap'),'failed attempt preserves geometry and exact validation error');
+  check(el('stageTitle').textContent==='Validation failed'&&el('issue').textContent.includes('disconnected'),'failed attempt preserves geometry and exact validation error');
   check(el('left').querySelectorAll('.shape').length>0,'failed geometry is inspectable');
   el('attempts').children[3].click();
   check(!el('left').querySelector('.shape')&&!el('parts').children.length,'timeline does not reveal future proposals before the model responds');
@@ -28,6 +29,11 @@
   el('scrub').value=0;el('scrub').dispatchEvent(new Event('input'));el('speed').value='550';el('play').click();await wait(700);el('play').click();
   check(api.getState().index>0&&el('play').textContent==='Play','playback advances and pauses');
   const original=JSON.parse(fixtures.success);
+  api.load(JSON.parse(fixtures.views));
+  el('viewChoice').value='front';el('viewChoice').dispatchEvent(new Event('change'));
+  check(el('left').querySelectorAll('.shape').length>1&&el('left').textContent.includes('height'),'front elevation replays without plan-only coordinates');
+  el('viewChoice').value='side';el('viewChoice').dispatchEvent(new Event('change'));
+  check(el('left').querySelectorAll('.shape').length>1&&el('left').textContent.includes('height'),'right side elevation replays from the same assembly');
   api.load(JSON.parse(fixtures.failed));
   check(api.getState().status==='failed'&&el('issue').textContent.includes('3 attempts'),'exhausted retries reopen offline');
   api.load(JSON.parse(fixtures.canceled));

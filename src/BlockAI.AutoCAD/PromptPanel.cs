@@ -20,6 +20,9 @@ internal sealed class PromptPanel : UserControl
     private readonly TextBox model = new() { Text = DesignAgent.DefaultModel };
     private readonly CheckBox visualReview = new() {Text="Review the preview with vision AI (slower)",Checked=true,AutoSize=true};
     private readonly TextBox reviewModel = new() {Text=DesignAgent.DefaultModel};
+    private readonly CheckBox elevations = new() {Text="Generate plan, front and right-side views",Checked=true,AutoSize=true};
+    private readonly ComboBox drawingView = new() {DropDownStyle=ComboBoxStyle.DropDownList,Enabled=false};
+    private DesignViews? generatedViews;
     private readonly ComboBox units = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly Button generate = new() { Text = "Generate block", Height = 36 };
     private readonly Button demo = new() { Text = "Load example king bed", Height = 30 };
@@ -54,7 +57,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.4.4 · Design replay and visual debugging");
+        Label("v0.5.0 · Design replay and visual debugging");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -70,12 +73,16 @@ internal sealed class PromptPanel : UserControl
         Add(model);
         Add(visualReview);
         Add(reviewModel);
+        Add(elevations);
         Add(generate);
         Add(cancel);
         Add(status);
         Add(openViewer);
         Add(recordingNote);
         Add(demo);
+        drawingView.Items.AddRange(["Plan","Front elevation","Right side elevation"]);
+        drawingView.SelectedIndex=0;
+        Add(drawingView);
         Add(preview);
         Add(details);
         Label("Drawing units — match your current drawing");
@@ -96,7 +103,7 @@ internal sealed class PromptPanel : UserControl
             if (IsLocal) { if (savePrevious) openAiModel = model.Text; model.Text = localModel; }
             else { if (savePrevious) localModel = model.Text; model.Text = openAiModel; }
             apiKey.Visible = !IsLocal;
-            visualReview.Visible=reviewModel.Visible=IsLocal;
+            visualReview.Visible=reviewModel.Visible=elevations.Visible=IsLocal;
             startLocal.Visible = checkLocal.Visible = IsLocal;
             providerNote.Text = IsLocal
                 ? "AI designs the parts and layout. Geometry checks and optional preview review can request corrections."
@@ -152,7 +159,12 @@ internal sealed class PromptPanel : UserControl
             catch(Exception ex) {recordingNote.Text="Could not open viewer: "+ex.Message;}
         };
         cancel.Click += (_, _) => cancellation?.Cancel();
-        demo.Click += (_, _) => ShowSpec(BlockSpec.DemoKingBed(), "Offline example ready. Check units, then insert.");
+        demo.Click += (_, _) => {generatedViews=null;drawingView.SelectedIndex=0;drawingView.Enabled=false;ShowSpec(BlockSpec.DemoKingBed(), "Offline example ready. Check units, then insert.");};
+        drawingView.SelectedIndexChanged += (_, _) =>
+        {
+            if(generatedViews is null)return;
+            ShowSpec(drawingView.SelectedIndex switch {1=>generatedViews.Front,2=>generatedViews.Side,_=>generatedViews.Plan},"View ready. Insert places the selected view.");
+        };
         insert.Click += async (_, _) =>
         {
             insert.Enabled=false;
@@ -177,6 +189,8 @@ internal sealed class PromptPanel : UserControl
             return;
         }
         spec = null;
+        generatedViews=null;
+        drawingView.SelectedIndex=0;
         preview.Spec = null;
         preview.Invalidate();
         details.Clear();
@@ -192,8 +206,9 @@ internal sealed class PromptPanel : UserControl
             {
                 var progress=new Progress<string>(message=>{if(!IsDisposed)status.Text=message;});
                 var result=await new DesignAgent(new OllamaClient(LocalHttp)).GenerateAsync(prompt.Text,model.Text,
-                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording);
+                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,elevations.Checked,PlanRenderer.Png);
                 generated=result.Block;
+                if(result.Front is not null&&result.Side is not null)generatedViews=new(generated,result.Front,result.Side);
             }
             else
             {
@@ -233,7 +248,8 @@ internal sealed class PromptPanel : UserControl
     {
         generate.Enabled = demo.Enabled = prompt.Enabled = apiKey.Enabled = model.Enabled = !busy;
         provider.Enabled = startLocal.Enabled = checkLocal.Enabled = !busy;
-        visualReview.Enabled=reviewModel.Enabled=!busy;
+        visualReview.Enabled=reviewModel.Enabled=elevations.Enabled=!busy;
+        drawingView.Enabled=!busy&&generatedViews is not null;
         cancel.Enabled = busy;
         insert.Enabled = !busy && spec is not null;
         openViewer.Enabled=!busy&&latestRecording is not null;

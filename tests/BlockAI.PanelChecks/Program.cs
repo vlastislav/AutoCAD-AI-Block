@@ -51,6 +51,21 @@ internal static class Program
                 Field<Button>("insert").PerformClick();
                 Check(Field<Label>("status").Text.Contains("Drawing is busy")&&Field<Button>("insert").Enabled,"insertion error visible and button reusable");
                 Plugin.Failure=null;Plugin.NextResult=true;
+                var multi=ElevationBuilder.Build(new DesignPlan("PanelFixture","Table with a pedestal",1000,600,
+                    [new("base","rectangle",.3,.3,.4,.4,0,1,"none",0,false,"none",0,[],Z:0,Height:400),
+                     new("tabletop","rectangle",0,0,1,1,0,1,"none",0,false,"none",0,[],Z:400,Height:50)],450),"table");
+                {
+                    typeof(PromptPanel).GetField("generatedViews",BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(panel,multi);
+                    typeof(PromptPanel).GetMethod("SetBusy",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(panel,[false]);
+                    Field<ComboBox>("drawingView").SelectedIndex=1;
+                    Field<Button>("insert").PerformClick();
+                    Check(ReferenceEquals(Plugin.Inserted,multi.Front),"front selector sends front geometry to insertion bridge");
+                    Field<ComboBox>("drawingView").SelectedIndex=2;
+                    Field<Button>("insert").PerformClick();
+                    Check(ReferenceEquals(Plugin.Inserted,multi.Side),"side selector sends side geometry to insertion bridge");
+                    Field<Button>("demo").PerformClick();
+                    Check(!Field<ComboBox>("drawingView").Enabled&&Field<ComboBox>("drawingView").SelectedIndex==0,"offline example clears stale elevation selection");
+                }
                 using var image = new Bitmap(panel.Width, panel.Height);
                 panel.DrawToBitmap(image, panel.ClientRectangle);
                 image.Save("artifacts-next/panel-local-preview.png");

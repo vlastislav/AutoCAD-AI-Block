@@ -5,7 +5,7 @@ namespace BlockAI.Core;
 
 public sealed record RecordedGeometry(int PartId,string Role,Primitive Geometry);
 public sealed record CoordinateFit(double MinX,double MinY,double ScaleX,double ScaleY);
-public sealed record ConstructionFrame(string Stage,string Message,string Units,RecordedGeometry[] Geometry,int? FocusPart=null,CoordinateFit? Fit=null);
+public sealed record ConstructionFrame(string Stage,string Message,string Units,RecordedGeometry[] Geometry,int? FocusPart=null,CoordinateFit? Fit=null,string View="plan");
 public sealed record DesignEvent(double ElapsedMs,int Attempt,string Stage,string Message,
     DesignPlan? Plan=null,ConstructionFrame? Frame=null,VisualReview? Review=null,string? RawResponse=null);
 

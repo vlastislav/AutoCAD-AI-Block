@@ -2,14 +2,15 @@ using System.Text.Json;
 
 namespace BlockAI.Core;
 
-public sealed record DesignResult(DesignPlan Plan,BlockSpec Block,int Attempts,bool VisuallyReviewed);
+public sealed record DesignResult(DesignPlan Plan,BlockSpec Block,int Attempts,bool VisuallyReviewed,BlockSpec? Front=null,BlockSpec? Side=null);
 public sealed record VisualReview(bool Accepted,string[] Issues);
 
 public sealed class DesignAgent(OllamaClient client)
 {
     public const string DefaultModel="qwen3.5:4b";
     public async Task<DesignResult> GenerateAsync(string prompt,string model,string? reviewModel,
-        Func<BlockSpec,byte[]>? render,IProgress<string>? progress,CancellationToken cancellation,DesignRecording? recording=null)
+        Func<BlockSpec,byte[]>? render,IProgress<string>? progress,CancellationToken cancellation,DesignRecording? recording=null,
+        bool elevations=false,Func<DesignViews,byte[]>? renderViews=null)
     {
         var currentAttempt=0;
         try
@@ -27,27 +28,43 @@ public sealed class DesignAgent(OllamaClient client)
             progress?.Report(attempt==1?"Designing parts and their arrangement…":$"Revising design ({attempt}/3): {feedback}");
             var input=prompt;
             if(previous.Length>0) input+="\nPrevious plan:\n"+previous+"\nRequired corrections:\n"+feedback;
-            previous=await client.ToolJsonAsync(model,DesignPlan.Instructions+"\n"+DesignPlan.WorkedExample,input,DesignPlan.Schema,null,cancellation);
+            else if(feedback.Length>0)input+="\nRequired corrections:\n"+feedback;
+            try
+            {
+                previous=await client.ToolJsonAsync(model,DesignPlan.Instructions+"\n"+(elevations?DesignPlan.ElevationInstructions+"\n"+DesignPlan.ElevationExample:DesignPlan.WorkedExample),input,DesignPlan.SchemaFor(elevations),null,cancellation);
+            }
+            catch(InvalidDataException ex) when(ex.Message.Contains("incomplete",StringComparison.OrdinalIgnoreCase))
+            {
+                feedback="The previous response exceeded the output limit. Return a complete compact plan with at most 6 meaningful part definitions; use mirror/repetition and omit unrequested details.";
+                recording?.Add(attempt,"validation-failed",ex.Message+" "+feedback);
+                previous="";continue;
+            }
             recording?.Add(attempt,"response","Designer returned JSON tool arguments.",raw:previous);
             DesignPlan plan;
             BlockSpec block;
+            DesignViews? views=null;
             try
             {
                 plan=DesignPlan.Parse(previous);
                 recording?.Add(attempt,"proposal","AI-proposed parts and their requested parameters. Bounding boxes are proposals, not constructed outlines.",plan:plan);
                 progress?.Report("Building geometry and checking dimensions and constraints…");
-                block=plan.Build(prompt,recording is null?null:frame=>recording.Add(attempt,frame.Stage,frame.Message,frame:frame));
+                Action<ConstructionFrame>? observe=recording is null?null:frame=>recording.Add(attempt,frame.Stage,frame.Message,frame:frame);
+                if(elevations){views=ElevationBuilder.Build(plan,prompt,observe);block=views.Plan;}
+                else block=plan.Build(prompt,observe);
             }
             catch(Exception ex) when(ex is JsonException or InvalidDataException)
             {feedback=ex.Message;recording?.Add(attempt,"validation-failed",feedback);continue;}
             if(reviewModel is not null)
             {
-                recording?.Add(attempt,"review-start","Sending only the generated plan preview to the selected local reviewer. The image is not stored in this recording.");
-                progress?.Report("Reviewing the rendered plan…");
-                var image=render!(block);
+                var allViewsReviewed=views is not null&&renderViews is not null;
+                recording?.Add(attempt,"review-start",allViewsReviewed?"Sending the generated plan/front/right-side sheet to the local reviewer. No images are stored in this recording.":"Sending only the generated plan preview to the local reviewer. No image is stored in this recording.");
+                progress?.Report(allViewsReviewed?"Reviewing plan, front and side views…":"Reviewing the rendered plan…");
+                var image=allViewsReviewed?renderViews!(views!):render!(block);
                 var reviewText=await client.ToolJsonAsync(reviewModel,ReviewInstructions,
                     "Requested design: "+prompt+"\nDesigner description: "+plan.Description+"\nActual footprint: "+block.Bounds().Width+" x "+block.Bounds().Height+" mm.\n"
-                    +"Inspect the image. Judge recognition, plan view, proportions, visible negative requirements and disconnected/overlapping components. Do not demand legs hidden by a seat.",
+                    +"Declared top-view order (higher is closer): "+string.Join("; ",plan.Parts.Select(p=>$"{p.Role}: level={p.EffectiveLevel}, opaque={p.Opaque}"+(views is not null?$", z={p.Z}, height={p.Height} mm":"")))+".\n"
+                    +(allViewsReviewed?"Image panels: PLAN at left, FRONT elevation at center, RIGHT SIDE elevation at right. Elevations share the assembly's dimensions and use vertical extrusion envelopes. Inspect each labeled view; do not confuse separate panels with overlapping furniture.\n":"Only the plan image is supplied; do not claim to have inspected elevations.\n")
+                    +"Inspect the FINAL visible lines after depth trimming. Judge recognition, plan view, proportions, visible negative requirements and disconnected components. Intentional projection overlap is normal; do not reject it by itself. If hidden lines or depth are wrong, name the parts and suggest an above/below correction. Do not demand legs hidden by a seat.",
                     ReviewSchema,image,cancellation);
                 recording?.Add(attempt,"review-response","Reviewer returned structured feedback.",raw:reviewText);
                 VisualReview review;
@@ -63,7 +80,7 @@ public sealed class DesignAgent(OllamaClient client)
                 $"Design attempts: {attempt}. "+(reviewModel is null?"Visual review disabled; appearance has not been reviewed by AI.":$"Preview reviewed by {reviewModel}. This is subjective feedback, not an accuracy guarantee.")}).ToArray()};
             if(reviewModel is null)recording?.Add(attempt,"review-skipped","Visual review disabled; appearance was not reviewed.");
             recording?.Finish("succeeded","Design offered for insertion.",attempt);
-            return new(plan,block,attempt,reviewModel is not null);
+            return new(plan,block,attempt,reviewModel is not null,views?.Front,views?.Side);
         }
         throw new InvalidDataException("Design did not pass checks after 3 attempts. Last feedback: "+feedback);
         }
@@ -74,9 +91,15 @@ public sealed class DesignAgent(OllamaClient client)
     }
 
     public const string ReviewInstructions="""
-    You review a rendered 2D architectural furniture PLAN, not a photo or front elevation.
+    You review rendered 2D architectural furniture drawings, not photographs.
+    Inspect each image panel according to its label: PLAN is straight down, FRONT and RIGHT SIDE are elevations.
+    A plan-only image must not be judged as a front elevation, and an elevation panel must not be judged as a plan.
     Compare the image with the user's actual request. Reject unrecognizable shapes, major disconnected parts,
-    seat/back overlap, wrong view, or visible features expressly forbidden by the request.
+    wrong view, incorrect visible hidden-line treatment, or visible features expressly forbidden by the request.
+    Overlap in a top view is normal: higher opaque surfaces hide lower parts. Do not demand that seat/back,
+    arms, rails or cushions be separated merely because their projected boxes overlap.
+    The engine already trims by declared levels. Evaluate the final visible outlines and whether the depth order is plausible.
+    If depth is wrong, identify the parts and request a higher/lower level, or opaque=false for a seam/open detail.
     Simple clean drafting is acceptable. Do not invent requirements for style or construction details.
     Do not reject omitted legs underneath an opaque seat/tabletop. Do not infer physical strength from a plan.
     The supplied footprint is checked mathematically; pixel dimensions are not physical measurements.

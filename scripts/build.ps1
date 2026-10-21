@@ -27,4 +27,7 @@ Copy-Item -LiteralPath "$projectRoot\src\BlockAI.AutoCAD\bin\Release\net8.0-wind
 Copy-Item -LiteralPath "$projectRoot\packaging\PackageContents.xml" -Destination "$outputRoot\BlockAI.bundle"
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-demo.html" -Destination "$outputRoot\design-viewer.html"
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-demo.json" -Destination "$outputRoot\design-viewer-demo.json"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-views.html" -Destination "$outputRoot\three-view-demo.html"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-views.json" -Destination "$outputRoot\three-view-demo.json"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\shared-table-views.png" -Destination "$outputRoot\three-view-demo.png"
 Write-Host "Ready: $outputRoot\BlockAI.bundle"
