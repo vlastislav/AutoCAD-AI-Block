@@ -32,6 +32,7 @@ internal static class Program
                 Check(Field<ComboBox>("provider").SelectedIndex == 0, "local provider default");
                 Check(Field<TextBox>("model").Text == DesignAgent.DefaultModel, "local model default");
                 Check(!Field<TextBox>("apiKey").Visible, "no key field in local mode");
+                Check(!Field<CheckBox>("elevations").Checked&&!Field<CheckBox>("elevations").Visible&&!Field<ComboBox>("drawingView").Visible,"current palette exposes plan views only");
                 Field<TextBox>("model").Text = "custom:local";
                 Field<ComboBox>("provider").SelectedIndex = 1;
                 Check(Field<TextBox>("model").Text == "gpt-4.1-mini", "OpenAI model retained independently");

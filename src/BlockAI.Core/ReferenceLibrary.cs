@@ -65,7 +65,7 @@ public sealed class ReferenceLibrary(IEnumerable<ReferenceLesson> lessons)
         File.Move(temporary,path,true);
     }
 
-    public ReferenceLesson[] Match(string prompt,int maximum=2)
+    public ReferenceLesson[] Match(string prompt,int maximum=2,bool planOnly=false)
     {
         var requested=new HashSet<string>();
         var aliases=new Dictionary<string,string>{["bed"]=@"beds?|mattress",["chair"]=@"chairs?|armchairs?|seats?|stools?|benches|bench",["sofa"]=@"sofas?|couches|couch|settees?",["table"]=@"tables?",["desk"]=@"desks?|workstations?",["cabinet"]=@"cabinets?|wardrobes?|cupboards?|dressers?|closets?",["appliance"]=@"sinks?|ovens?|cooktops?|refrigerators?|fridges?"};
@@ -74,6 +74,7 @@ public sealed class ReferenceLibrary(IEnumerable<ReferenceLesson> lessons)
         var noCushion=Regex.IsMatch(prompt,@"\b(?:no|without)\s+(?:(?:a|any|seat)\s+)?(?:cushions?|padding|upholstery)\b|\buncushioned\b",RegexOptions.IgnoreCase);
         var noArms=Regex.IsMatch(prompt,@"\barmless\b|\b(?:no|without)\s+(?:arms|armrests?)\b",RegexOptions.IgnoreCase);
         return Lessons.Where(l=>l.Approved&&l.Analysis.Confidence>=.55&&l.Analysis.View is "plan" or "front" or "side")
+            .Where(l=>!planOnly||l.Analysis.View=="plan")
             .Where(l=>requested.Count==0||requested.Contains(l.Analysis.Category))
             .Where(l=>!Regex.IsMatch(prompt,@"\bdining\b",RegexOptions.IgnoreCase)||Regex.IsMatch(prompt,@"\boffice\b",RegexOptions.IgnoreCase)||!Regex.IsMatch(l.Analysis.Name+" "+string.Join(" ",l.Analysis.Tags),@"\b(?:office|task|swivel|casters?)\b",RegexOptions.IgnoreCase))
             .Where(l=>!noCushion||l.Analysis.Cushioned!=true).Where(l=>!noArms||l.Analysis.Armrests!=true)

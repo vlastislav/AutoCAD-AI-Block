@@ -20,7 +20,7 @@ internal sealed class PromptPanel : UserControl
     private readonly TextBox model = new() { Text = DesignAgent.DefaultModel };
     private readonly CheckBox visualReview = new() {Text="Review the preview with vision AI (slower)",Checked=true,AutoSize=true};
     private readonly TextBox reviewModel = new() {Text=DesignAgent.DefaultModel};
-    private readonly CheckBox elevations = new() {Text="Generate plan, front and right-side views",Checked=true,AutoSize=true};
+    private readonly CheckBox elevations = new() {Text="Generate plan, front and right-side views",Checked=false,Visible=false,AutoSize=true};
     private readonly CheckBox useReferences = new() {Text="Use matching reference analyses",Checked=true,AutoSize=true};
     private readonly Button referenceLibrary = new() {Text="Reference library — names and design notes",Height=30};
     private readonly Label referenceStatus = new() {Text="References are selected by name, category and tags.",AutoSize=true};
@@ -60,7 +60,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.6.1 · Design replay and visual debugging");
+        Label("v0.6.2 · Plan views only");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -76,7 +76,6 @@ internal sealed class PromptPanel : UserControl
         Add(model);
         Add(visualReview);
         Add(reviewModel);
-        Add(elevations);
         Add(useReferences);
         Add(referenceLibrary);
         Add(referenceStatus);
@@ -88,7 +87,7 @@ internal sealed class PromptPanel : UserControl
         Add(demo);
         drawingView.Items.AddRange(["Plan","Front elevation","Right side elevation"]);
         drawingView.SelectedIndex=0;
-        Add(drawingView);
+        drawingView.Visible=false;
         Add(preview);
         Add(details);
         Label("Drawing units — match your current drawing");
@@ -109,7 +108,7 @@ internal sealed class PromptPanel : UserControl
             if (IsLocal) { if (savePrevious) openAiModel = model.Text; model.Text = localModel; }
             else { if (savePrevious) localModel = model.Text; model.Text = openAiModel; }
             apiKey.Visible = !IsLocal;
-            visualReview.Visible=reviewModel.Visible=elevations.Visible=useReferences.Visible=referenceLibrary.Visible=referenceStatus.Visible=IsLocal;
+            visualReview.Visible=reviewModel.Visible=useReferences.Visible=referenceLibrary.Visible=referenceStatus.Visible=IsLocal;
             startLocal.Visible = checkLocal.Visible = IsLocal;
             providerNote.Text = IsLocal
                 ? "AI designs the parts and layout. Geometry checks and optional preview review can request corrections."
@@ -212,11 +211,11 @@ internal sealed class PromptPanel : UserControl
             if(useLocal)
             {
                 var library=ReferenceLibrary.Load(ReferenceLibrary.DefaultDirectory,out var warnings);
-                var references=useReferences.Checked?library.Match(prompt.Text):[];
+                var references=useReferences.Checked?library.Match(prompt.Text,planOnly:true):[];
                 referenceStatus.Text=references.Length==0?"No matching reference used."+(warnings.Length>0?$" {warnings.Length} invalid lesson file(s) skipped.":""):"Using: "+string.Join("; ",references.Select(r=>r.Analysis.Name+(r.Geometry is null?" (notes)":" (measured geometry + notes)")));
                 var progress=new Progress<string>(message=>{if(!IsDisposed)status.Text=message;});
                 var result=await new DesignAgent(new OllamaClient(LocalHttp)).GenerateAsync(prompt.Text,model.Text,
-                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,elevations.Checked,PlanRenderer.Png,references);
+                    visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,references:references);
                 generated=result.Block;
                 if(result.Front is not null&&result.Side is not null)generatedViews=new(generated,result.Front,result.Side);
             }

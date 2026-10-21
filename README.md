@@ -4,6 +4,10 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a plan and optional front/right-side elevations, and insert a selected view as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
+## v0.6.2: focus on plan views
+
+The palette now generates and reviews plan views only. Elevation controls are hidden, and matching uses plan references only. Elevation code and older multi-view recordings remain available for later development. Load `artifacts-v062\BlockAI.bundle\Contents\Windows\BlockAI.dll` after restarting AutoCAD and confirm **v0.6.2 · Plan views only** in `AIBLOCK`.
+
 ## v0.6.1: measured reference geometry prototype
 
 The first bed study can now supply normalized DWG outlines, measured aspect ratio, repeated outline sizes and bounding-box containment alongside its notes. This is an experimental geometry input, not a trained model or a traced block. The palette labels studies with measured geometry; the replay renders that input separately from generated output. Only the isolated `bed053` study has been prepared this way locally. Other references still supply notes.
