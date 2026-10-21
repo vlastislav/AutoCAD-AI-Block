@@ -15,7 +15,7 @@ if(installSource.Length>0)
     foreach(var lesson in library.Lessons)
     {
         if(args.Contains("--force")||!File.Exists(Path.Combine(destination,lesson.Id+".lesson.json")))ReferenceLibrary.Save(destination,lesson);
-        foreach(var extension in new[]{".png",".initial-analysis.json"})
+        foreach(var extension in new[]{".png",".initial-analysis.json",".geometry.json"})
         {var source=Path.Combine(installSource,lesson.Id+extension);var target=Path.Combine(destination,lesson.Id+extension);if(File.Exists(source)&&(args.Contains("--force")||!File.Exists(target)))File.Copy(source,target,true);}
     }
     Console.WriteLine($"Installed {library.Lessons.Length} named studies ({library.Lessons.Count(l=>l.Approved)} reviewed) to {destination}. Existing labels are preserved unless --force is supplied.");
@@ -36,13 +36,21 @@ for(var i=0;i<candidates.Length;i++)
     var c=candidates[i];var source=Path.GetFullPath(Path.Combine(baseDirectory,c.Source));
     try
     {
-        byte[] png;
+        byte[] png;ReferenceGeometry? measured=null;
         if(Path.GetExtension(source).Equals(".json",StringComparison.OrdinalIgnoreCase))
         {
             var drawing=JsonSerializer.Deserialize<ExportedDrawing>(File.ReadAllText(source),new JsonSerializerOptions(BlockSpec.JsonOptions){PropertyNameCaseInsensitive=true})??throw new InvalidDataException("Empty drawing export.");
             var strokes=drawing.Strokes.Where(s=>s.Group==c.Group||s.Group.StartsWith(c.Group+" / ",StringComparison.Ordinal)).ToArray();
             if(strokes.Length==0)throw new InvalidDataException("No curves in the selected group.");
             var points=strokes.SelectMany(s=>s.Points).ToArray();var minX=points.Min(p=>p[0]);var maxX=points.Max(p=>p[0]);var minY=points.Min(p=>p[1]);var maxY=points.Max(p=>p[1]);
+            if(Option("--geometry-group")==c.Group)
+            {
+                var crop=Option("--geometry-crop","0,0,1,1").Split(',').Select(n=>double.Parse(n,System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+                if(crop.Length!=4||crop.Any(n=>!double.IsFinite(n)||n<0||n>1)||crop[2]<=0||crop[3]<=0||crop[0]+crop[2]>1||crop[1]+crop[3]>1)throw new InvalidDataException("Invalid normalized geometry crop.");
+                var x0=minX+crop[0]*(maxX-minX);var x1=x0+crop[2]*(maxX-minX);var y0=minY+crop[1]*(maxY-minY);var y1=y0+crop[3]*(maxY-minY);
+                var isolated=strokes.Where(s=>s.Points.All(p=>p[0]>=x0&&p[0]<=x1&&p[1]>=y0&&p[1]<=y1));
+                measured=ReferenceGeometry.Create(isolated.Select(s=>s.Points.Select(p=>new Point2(p[0],p[1])).ToArray()));
+            }
             var scale=Math.Min(840/Math.Max(.001,maxX-minX),840/Math.Max(.001,maxY-minY));
             using var image=new Bitmap(900,900);using var g=Graphics.FromImage(image);g.Clear(Color.White);g.SmoothingMode=SmoothingMode.AntiAlias;using var pen=new Pen(Color.FromArgb(25,35,45),1.5f);
             foreach(var stroke in strokes)
@@ -72,6 +80,7 @@ for(var i=0;i<candidates.Length;i++)
         }
         var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(png)).ToLowerInvariant();var id=hash[..20];
         File.WriteAllBytes(Path.Combine(directory,id+".png"),png);
+        if(measured is not null)File.WriteAllText(Path.Combine(directory,id+".geometry.json"),JsonSerializer.Serialize(measured,BlockSpec.JsonOptions));
         thumbnails.Add((Path.Combine(directory,id+".png"),c.Group));
         ReferenceLesson? lesson=null;
         var lessonPath=Path.Combine(directory,id+".lesson.json");

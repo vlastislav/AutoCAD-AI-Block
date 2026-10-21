@@ -4,6 +4,14 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a plan and optional front/right-side elevations, and insert a selected view as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
+## v0.6.1: measured reference geometry prototype
+
+The first bed study can now supply normalized DWG outlines, measured aspect ratio, repeated outline sizes and bounding-box containment alongside its notes. This is an experimental geometry input, not a trained model or a traced block. The palette labels studies with measured geometry; the replay renders that input separately from generated output. Only the isolated `bed053` study has been prepared this way locally. Other references still supply notes.
+
+Bed requests no longer receive the worked chair assembly. Basic conventional-bed checks reject a sleeping surface occupying less than 55% of either footprint axis and a headboard shaped like a narrow central post. These checks do not establish visual quality. Original source units and unseen construction remain unknown.
+
+The live geometry-guided queen-bed test still failed after three attempts: its first draft had a broad mattress but poor detail placement, the reviewer missed visible pillows and invented texture requirements, and later repairs exceeded output limits or duplicated frame outlines. This prototype is for inspection and further development, not a proven quality fix. Load the current local build from `artifacts-v061\BlockAI.bundle\Contents\Windows\BlockAI.dll` after restarting AutoCAD, then run `AIBLOCK` and confirm v0.6.1. With reference matching enabled, a normal bed request should list **Framed bed with narrow head rail, plan (measured geometry + notes)**.
+
 ## v0.6.0: reference studies and meaningful revisions
 
 The local generator can now use up to two reviewed furniture studies selected by category, name and tags. Open **Reference library** to inspect analyses, correct names/tags, and approve isolated image analyses. Supplied DWGs were used to prepare a private starter collection: 13 studies, 10 reviewed and enabled. Source files and derived images are not bundled or published. See [reference preparation](docs/reference-workflow.md) for the workflow and limitations.

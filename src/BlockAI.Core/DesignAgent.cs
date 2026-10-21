@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace BlockAI.Core;
 
@@ -20,7 +21,7 @@ public sealed class DesignAgent(OllamaClient client)
         if(reviewModel is not null&&render is null) throw new ArgumentException("Visual review requires a preview renderer.");
         var selected=references?.Where(r=>r.Approved).Take(2).ToArray()??[];
         foreach(var lesson in selected)lesson.Validate();
-        recording?.Add(0,"references",selected.Length==0?"No matching reference lessons supplied; generation uses the request and drawing tools.":"Reference analysis used: "+string.Join("; ",selected.Select(r=>r.Analysis.Name)),references:selected);
+        recording?.Add(0,"references",selected.Length==0?"No matching reference lessons supplied; generation uses the request and drawing tools.":"Reference analysis used: "+string.Join("; ",selected.Select(r=>r.Analysis.Name+(r.Geometry is null?" (notes)":$" ({r.Geometry.Outlines.Length} measured outlines + notes)"))),references:selected);
         var referenceContext=ReferenceLibrary.Context(selected);
         var feedback="";
         var previous="";
@@ -37,9 +38,11 @@ public sealed class DesignAgent(OllamaClient client)
             else if(feedback.Length>0)input+="\nRequired corrections:\n"+feedback;
             try
             {
-                var guidance=attempt==1?(elevations?DesignPlan.ElevationInstructions+"\n"+DesignPlan.ElevationExample:DesignPlan.WorkedExample)
-                    :(elevations?DesignPlan.ElevationInstructions+"\n":"")+"REVISE the previous assembly using the specific feedback. Change the named geometry/placement/depth or dimensions; renaming or rewriting the description is not a revision. Preserve parts that already satisfy the request. Do not restart from the worked example.";
-                previous=await client.ToolJsonAsync(model,DesignPlan.Instructions+"\n"+guidance,input,DesignPlan.SchemaFor(elevations),null,cancellation);
+                var chairRequest=Regex.IsMatch(prompt,@"\b(?:chair|armchair)\b",RegexOptions.IgnoreCase);
+                var vertical=chairRequest?DesignPlan.ElevationInstructions:DesignPlan.ElevationInstructions[..DesignPlan.ElevationInstructions.IndexOf("Example chair:",StringComparison.Ordinal)]+"\nFront projects X/Z looking from -Y; right side projects Y/Z looking from +X. Use the requested furniture's own construction; do not add chair parts.";
+                var guidance=attempt==1?(elevations?vertical+"\n"+(chairRequest?DesignPlan.ElevationExample:""):chairRequest?DesignPlan.WorkedExample:"")
+                    :(elevations?vertical+"\n":"")+"REVISE the previous assembly using the specific feedback. Change the named geometry/placement/depth or dimensions; renaming or rewriting the description is not a revision. Preserve parts that already satisfy the request. Do not restart from the worked example.";
+                previous=await client.ToolJsonAsync(model,DesignPlan.InstructionsFor(prompt)+"\n"+guidance,input,DesignPlan.SchemaFor(elevations),null,cancellation);
             }
             catch(InvalidDataException ex) when(ex.Message.Contains("incomplete",StringComparison.OrdinalIgnoreCase))
             {

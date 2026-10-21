@@ -33,6 +33,8 @@
   referenceRun.events.find(e=>e.stage==='references').references=[{sourceFile:'reference.dwg',sourceGroup:'single chair',model:'scripted',approved:true,analysis:{name:'Dining chair reference study',category:'chair',view:'plan'}}];
   api.load(referenceRun);
   check(el('referenceNotes').textContent.includes('Dining chair reference study')&&el('referenceNotes').textContent.includes('reference.dwg'),'viewer identifies reference studies and their provenance');
+  referenceRun.events.find(e=>e.stage==='references').references[0].geometry={aspectRatio:.5,outlines:[{id:0,points:[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1},{x:0,y:0}]}],relations:[]};api.load(referenceRun);
+  check(el('referenceGeometry').querySelectorAll('polyline').length===1&&el('referenceGeometry').textContent.includes('study input'),'viewer shows measured study geometry separately from generated output');
   api.load(JSON.parse(fixtures.unchanged));
   const unchangedStep=[...el('steps').children].find(b=>b.textContent.includes('Unchanged revision rejected'));unchangedStep.click();
   check(el('stage').classList.contains('fail')&&el('message').textContent.includes('same visible geometry'),'viewer explains why a renamed duplicate was not a revision');

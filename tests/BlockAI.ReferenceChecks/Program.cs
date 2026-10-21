@@ -60,6 +60,34 @@ Check(result.Block.Bounds().Width==600&&result.Block.Bounds().Height==650,"reque
 Check(record.Events.Single(e=>e.Stage=="references").References!.Single().Id=="chair","replay identifies exactly which reference analysis was supplied");
 File.WriteAllText(Path.Combine(directory,"recording.json"),record.ToJson());
 Check(!record.ToJson().Contains("data:image"),"recording contains reference notes and provenance without image data");
+var measured=ReferenceGeometry.Create([
+    [new(10,20),new(15,20),new(20,20),new(20,40),new(10,40),new(10,20)],
+    [new(12,32),new(16,32),new(16,36),new(12,36),new(12,32)]]);
+Check(measured.AspectRatio==.5&&measured.Outlines[0].Points.Length==5,"reference geometry normalizes scale and removes collinear sampling");
+Check(measured.Relations.Any(r=>r.A==0&&r.B==1&&r.Kind=="bounds-contained"),"reference relationships describe measured bounds rather than invented semantics");
+File.WriteAllText(Path.Combine(directory,"chair.geometry.json"),JsonSerializer.Serialize(measured,BlockSpec.JsonOptions));
+Check(ReferenceLibrary.Load(directory,out _).Lessons.Single(l=>l.Id=="chair").Geometry is not null,"reviewed study loads its local geometry sidecar");
+Check(ReferenceLibrary.Context([chair with {Geometry=measured}]).Contains("\"outlines\"")&&ReferenceLibrary.Context([chair with {Geometry=measured}]).Contains("Do not trace"),"designer receives bounded geometry with interpretation instructions");
+File.WriteAllText(Path.Combine(directory,"chair.geometry.json"),"broken");
+Check(ReferenceLibrary.Load(directory,out _).Lessons.Single(l=>l.Id=="chair").Geometry is null,"corrupt geometry does not lose the usable semantic study");
+Check(!DesignPlan.InstructionsFor("queen bed plan").Contains("Dining chairs")&&DesignPlan.InstructionsFor("queen bed plan").Contains("BED PLAN"),"bed requests do not receive chair-specific design instructions");
+var bedPlan=new DesignPlan("Bed","Sleeping surface and headboard",1700,2200,[
+    new("mattress","rectangle",.05,0,.9,.92,0,1,"none",0,false,"none",0,[]),
+    new("headboard","rectangle",0,.92,1,.08,0,1,"none",0,false,"none",0,[])]);
+Check(bedPlan.Build("queen bed").Bounds().Width==1700,"bed validation permits a coherent independently designed bed");
+try{(bedPlan with {Parts=[bedPlan.Parts[0] with {W=.04},bedPlan.Parts[1]]}).Build("king bed");throw new Exception("Narrow strip accepted as mattress");}
+catch(InvalidDataException){Check(true,"regression: narrow bedding from the failed king bed cannot pass geometry checks");}
+var geometryAgent=new DesignAgent(new OllamaClient(new HttpClient(new Handler(async(message,ct)=>
+{
+    using var body=JsonDocument.Parse(await message.Content!.ReadAsStringAsync(ct));
+    var content=body.RootElement.GetProperty("messages")[1].GetProperty("content").GetString()!;
+    Check(content.Contains("\"aspectRatio\":0.5")&&content.Contains("\"outlines\"")&&content.Contains("bounds-contained"),"measured coordinates and relationships reach the model transport");
+    Check(!content.Contains("AssemblyExample")&&!content.Contains("Dining chairs"),"bed transport contains no worked chair assembly");
+    return Reply(JsonSerializer.Serialize(bedPlan,BlockSpec.JsonOptions));
+}))));
+var geometryRecording=new DesignRecording{Prompt="queen bed overall 1700 x 2200 mm",Model="scripted"};
+await geometryAgent.GenerateAsync(geometryRecording.Prompt,"scripted",null,null,null,default,geometryRecording,references:[bed with {Geometry=measured}]);
+Check(geometryRecording.Events.Single(e=>e.Stage=="references").References![0].Geometry!.Outlines.Length==2,"replay preserves actual measured input for offline inspection");
 Console.WriteLine($"{checks} reference checks passed.");
 
 static HttpResponseMessage Reply(string text)=>new(HttpStatusCode.OK){Content=new StringContent(JsonSerializer.Serialize(new{done=true,message=new{content=text}}))};

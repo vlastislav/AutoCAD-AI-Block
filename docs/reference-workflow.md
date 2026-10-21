@@ -8,6 +8,10 @@ The local starter collection contains 13 named studies extracted from the suppli
 
 ## Prepare and install studies
 
+The geometry prototype uses `--geometry-group bed053 --geometry-crop 0.19,0,0.62,1` when preparing the local starter manifest. This rectangle is in the selected export group's normalized XY bounds (+Y up), not image pixels. Only complete strokes inside the rectangle are included; crossing strokes are omitted rather than clipped. Inspect the result before use. For this bed, the rectangle excludes the adjacent side tables. This crop is study preparation, not generated furniture geometry.
+
+A `.geometry.json` sidecar stores up to 64 outlines/400 points, simplified with normalized tolerance 0.002. It preserves aspect ratio and computes same-size and bounding-box containment relations; neither proves part function or physical connectivity. The generator must interpret roles and produce new geometry. It does not read native DWG bytes. Sidecars remain private and are included in offline generation recordings; the viewer displays them separately. This prototype is enabled only where a reviewed study has a valid sidecar. Invalid sidecars fall back to notes.
+
 `tools/BlockAI.ReferencePrepare` reads a private JSON manifest of candidates. Each candidate specifies `Source` (export JSON or PNG), `Group` (export group), optional `Name`, and optional normalized `Crop` rectangle `[x,y,width,height]`. Isolate one object before analysis. Run once with `--analyze` to create cached local vision analyses; inspect and correct their notes before approving them.
 
 ```powershell

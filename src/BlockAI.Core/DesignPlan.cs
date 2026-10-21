@@ -194,6 +194,20 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
         var all=built.SelectMany(b=>b.Geometry.Points).ToArray();
         var minX=all.Min(p=>p.X);var minY=all.Min(p=>p.Y);var spanX=all.Max(p=>p.X)-minX;var spanY=all.Max(p=>p.Y)-minY;
         if(spanX<.1||spanY<.1) throw new InvalidDataException("The design has degenerate overall extents.");
+        if(Regex.IsMatch(prompt,@"\bbeds?\b",RegexOptions.IgnoreCase)&&!Regex.IsMatch(prompt,@"\b(?:bunk|loft|folded|murphy|sofa)\b",RegexOptions.IgnoreCase))
+        {
+            var sleeping=built.Where(p=>Regex.IsMatch(p.Role,@"mattress|bedding|sleeping|duvet|quilt")).OrderByDescending(p=>{var b=Bounds(p.Geometry);return b.W*b.H;}).ToArray();
+            if(sleeping.Length==0)throw new InvalidDataException("A bed plan needs a broad sleeping surface. Identify its role as mattress or bedding; do not substitute a chair seat or only a frame.");
+            var b=Bounds(sleeping[0].Geometry);
+            if(b.W/spanX<.55||b.H/spanY<.55)
+                throw new InvalidDataException(FormattableString.Invariant($"Sleeping surface '{sleeping[0].Role}' occupies only {b.W/spanX:P0} of bed width and {b.H/spanY:P0} of depth. It must occupy most of BOTH axes (at least 55% for a conventional bed). Preserve the bed size and expand/reposition the actual sleeping surface; changing its description does not fix its geometry."));
+            foreach(var head in built.Where(p=>Regex.IsMatch(p.Role,@"headboard|headrail|head_rail")))
+            {
+                var hb=Bounds(head.Geometry);
+                if(hb.W<b.W*.65||hb.H>spanY*.35||hb.Y+hb.H/2<b.Y+b.H*.55)
+                    throw new InvalidDataException("Bed headboard/headrail must span the head end of the sleeping surface toward +Y. It is a broad thin band in plan, not a narrow central post or a front-elevation panel. Preserve the mattress and change the head part's width, depth or position.");
+            }
+        }
         Emit("constraints-passed","Construction constraints passed. This does not prove visual accuracy.");
         {
             // Visibility is based on declared depth, never XY position or list order.
@@ -322,6 +336,22 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
                 return Enumerable.Range(0,33).Select(i=>{var t=i/32.0;var q=1-t;return new Point2(q*q*p.Points[0].X+2*q*t*p.Points[1].X+t*t*p.Points[2].X,q*q*p.Points[0].Y+2*q*t*p.Points[1].Y+t*t*p.Points[2].Y);}).ToArray();
             default: throw new InvalidDataException("Unsupported drawing tool. Use rectangle, rounded, trapezoid, ellipse, path, polygon or curve.");
         }
+    }
+
+    public static string InstructionsFor(string prompt)
+    {
+        if(Regex.IsMatch(prompt,@"\b(?:chair|armchair)\b",RegexOptions.IgnoreCase))return Instructions;
+        var generic=Instructions[..Instructions.IndexOf("Keep a plain request plain.",StringComparison.Ordinal)];
+        if(Regex.IsMatch(prompt,@"\bbeds?\b",RegexOptions.IgnoreCase))generic+="""
+
+        BED PLAN: the sleeping surface (role mattress or bedding) occupies most of the bed width and length.
+        A headboard/headrail, when present, spans the head end near +Y; it is a wide thin band in plan, not a narrow central post.
+        The frame surrounds/supports the sleeping surface. Pillows, when appropriate and not forbidden, lie on the mattress near +Y, above bedding.
+        Bedding seams are nonopaque linework; do not hide the whole mattress with a higher full-footprint frame or decorative surface.
+        A furnished bed can show pillow outlines and a bedding fold; a bare bed/mattress must respect that request. Do not require or add accessories, bedside tables or a footboard unless appropriate to the request.
+        Design the requested type, dimensions and proportions yourself. These are part relationships, not fixed coordinates or a bed block template.
+        """;
+        return generic+"\nRespect the actual requested object, dimensions and negative requirements. Return a complete revised plan when correcting feedback. Do not add chair parts to other objects.";
     }
 
     public const string Instructions="""

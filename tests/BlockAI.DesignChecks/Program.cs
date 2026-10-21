@@ -231,11 +231,19 @@ File.WriteAllText("artifacts-design/viewer-failed.json",failedRecording.ToJson()
 File.WriteAllText("artifacts-design/viewer-canceled.json",cancelRecording.ToJson());
 Console.WriteLine($"{passed} design-loop checks passed.");
 
+if(Array.IndexOf(args,"--render-recording") is var renderIndex&&renderIndex>=0&&renderIndex+1<args.Length)
+{
+    using var saved=JsonDocument.Parse(File.ReadAllText(args[renderIndex+1]));
+    var proposal=saved.RootElement.GetProperty("events").EnumerateArray().First(e=>e.GetProperty("stage").GetString()=="proposal").GetProperty("plan");
+    var replayPlan=DesignPlan.Parse(proposal.GetRawText());
+    File.WriteAllBytes("artifacts-design/reference-bed-draft.png",PlanRenderer.Png(replayPlan.Build(saved.RootElement.GetProperty("prompt").GetString()!)));
+}
+
 if(args.Contains("--live"))
 {
     using var http=new HttpClient(new RecordingHandler(new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false})){Timeout=TimeSpan.FromMinutes(8)};
     var agent=new DesignAgent(new OllamaClient(http));
-    var prompts=args.Contains("--variations")?new[]{request,"Dining chair, no cushion, 500 x 550 mm, with a curved backrest and an oval seat","Dining chair, no cushion, 500 x 550 mm, straight backrest with four slats and a tapered seat"}:new[]{request};
+    var prompts=args.Contains("--bed")?new[]{"Queen sized bed plan, overall 1700 x 2200 mm, with two pillows and a wooden headboard"}:args.Contains("--variations")?new[]{request,"Dining chair, no cushion, 500 x 550 mm, with a curved backrest and an oval seat","Dining chair, no cushion, 500 x 550 mm, straight backrest with four slats and a tapered seat"}:new[]{request};
     for(var i=0;i<prompts.Length;i++)
     {
         var watch=System.Diagnostics.Stopwatch.StartNew();

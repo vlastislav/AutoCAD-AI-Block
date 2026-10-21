@@ -60,7 +60,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.6.0 · Design replay and visual debugging");
+        Label("v0.6.1 · Design replay and visual debugging");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -213,7 +213,7 @@ internal sealed class PromptPanel : UserControl
             {
                 var library=ReferenceLibrary.Load(ReferenceLibrary.DefaultDirectory,out var warnings);
                 var references=useReferences.Checked?library.Match(prompt.Text):[];
-                referenceStatus.Text=references.Length==0?"No matching reference used."+(warnings.Length>0?$" {warnings.Length} invalid lesson file(s) skipped.":""):"Using: "+string.Join("; ",references.Select(r=>r.Analysis.Name));
+                referenceStatus.Text=references.Length==0?"No matching reference used."+(warnings.Length>0?$" {warnings.Length} invalid lesson file(s) skipped.":""):"Using: "+string.Join("; ",references.Select(r=>r.Analysis.Name+(r.Geometry is null?" (notes)":" (measured geometry + notes)")));
                 var progress=new Progress<string>(message=>{if(!IsDisposed)status.Text=message;});
                 var result=await new DesignAgent(new OllamaClient(LocalHttp)).GenerateAsync(prompt.Text,model.Text,
                     visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,elevations.Checked,PlanRenderer.Png,references);

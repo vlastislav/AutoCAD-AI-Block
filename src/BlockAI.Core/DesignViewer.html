@@ -15,7 +15,7 @@
 <div id="empty"><h2>Open a saved generation recording</h2><p class="muted">Everything runs in this file. No AutoCAD, AI server or network connection is needed.</p></div>
 <div id="app" hidden>
 <section id="run"><div><div id="prompt"></div><p id="meta" class="muted"></p></div><div><span id="status" class="badge"></span></div></section>
-<section class="card pad" style="margin:0 28px 16px"><h2>Reference studies used</h2><div id="referenceNotes" class="muted" style="white-space:pre-wrap;overflow-wrap:anywhere"></div></section>
+<section class="card pad" style="margin:0 28px 16px"><h2>Reference studies used</h2><div id="referenceNotes" class="muted" style="white-space:pre-wrap;overflow-wrap:anywhere"></div><div id="referenceGeometry"></div></section>
 <main class="shell">
 <aside class="card pad sidebar"><h2>Attempts</h2><div id="attempts"></div><h2 style="margin-top:20px">Recorded steps</h2><nav id="steps" aria-label="Recorded steps"></nav></aside>
 <section class="card">
@@ -45,6 +45,7 @@ function validate(run){
  if(e.plan&&(typeof e.plan!=='object'||(Array.isArray(e.plan.parts)&&e.plan.parts.length>24)))throw Error('Invalid proposed parts.');
  if(e.review&&(typeof e.review.accepted!=='boolean'||!Array.isArray(e.review.issues)||e.review.issues.length>8||!e.review.issues.every(i=>typeof i==='string')))throw Error('Invalid visual feedback.');
  if(e.references&&(!Array.isArray(e.references)||e.references.length>2||!e.references.every(r=>r&&typeof r.sourceFile==='string'&&r.analysis&&typeof r.analysis.name==='string')))throw Error('Invalid reference usage record.');
+ if(e.references)for(const r of e.references){const g=r.geometry;if(!g)continue;if(!Number.isFinite(g.aspectRatio)||g.aspectRatio<=0||g.aspectRatio>100||!Array.isArray(g.outlines)||g.outlines.length>64||g.outlines.some(o=>!Array.isArray(o.points)||o.points.length>40||o.points.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)||p.x<0||p.x>1||p.y<0||p.y>1)))throw Error('Invalid reference geometry.');}
  if(e.frame){if(!['normalized','mm'].includes(e.frame.units)||!Array.isArray(e.frame.geometry)||e.frame.geometry.length>500)throw Error('Invalid construction frame.');
  if(e.frame.view&&!['plan','front','side'].includes(e.frame.view))throw Error('Invalid drawing view.');
  if(e.frame.fit&&!['minX','minY','scaleX','scaleY'].every(k=>finite(e.frame.fit[k])))throw Error('Invalid fitting transform.');
@@ -97,6 +98,8 @@ function draw(id,n,index){
 function inspect(snap){
  const refEvent=state.run.events.find(e=>e.references&&e.elapsedMs<=snap.event.elapsedMs);
  text('referenceNotes',refEvent?(refEvent.references.length?refEvent.references.map(r=>`${r.analysis.name} · ${r.analysis.category} · ${r.analysis.view}\nSource: ${r.sourceFile} / ${r.sourceGroup}\nModel: ${r.model}; reviewed: ${r.approved===true}`).join('\n\n'):'No matching reference analyses used in this run.'):'No reference usage recorded at this step.');
+ const referenceGeometry=document.getElementById('referenceGeometry');referenceGeometry.replaceChildren();
+ for(const r of refEvent?.references??[]){const g=r.geometry;if(!g)continue;const label=document.createElement('p');label.textContent=`Measured reference geometry: ${g.outlines.length} outlines; aspect ratio ${g.aspectRatio}. Source units unknown; simplified curves. This is study input, not generated output.`;referenceGeometry.append(label);const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox',`-0.05 -0.05 ${g.aspectRatio+.1} 1.1`);svg.style.cssText='width:100%;height:260px;background:#fff;border-radius:8px';for(const o of g.outlines){const path=document.createElementNS(svg.namespaceURI,'polyline');path.setAttribute('points',o.points.map(p=>`${p.x*g.aspectRatio},${1-p.y}`).join(' '));path.setAttribute('fill','none');path.setAttribute('stroke','#16313b');path.setAttribute('stroke-width','.003');svg.append(path);}referenceGeometry.append(svg);}
  const plan=events().slice(0,state.index+1).find(e=>e.plan)?.plan,parts=partList(plan);$('parts').replaceChildren();parts.forEach((p,i)=>{const b=document.createElement('button');b.className='part'+(i===state.part?' active':'');b.textContent=`${i+1}. ${p?.role||'Unnamed'} · ${p?.shape||'unknown'}`;b.onclick=()=>{state.part=i;render();};$('parts').append(b);});
  const p=parts[state.part];$('parameters').hidden=!p;text('parameters',p?JSON.stringify(p,null,2):'');
  if(p){const gs=snap.geometry.filter(g=>g.partId===state.part);const pts=gs.flatMap(g=>pointsOf(mapped(g,state.attempt,snap.units)));text('partInfo',pts.length?`${gs.length} visible outline(s) at this step. Bounds: X ${Math.min(...pts.map(q=>q.x)).toFixed(1)}–${Math.max(...pts.map(q=>q.x)).toFixed(1)}, Y ${Math.min(...pts.map(q=>q.y)).toFixed(1)}–${Math.max(...pts.map(q=>q.y)).toFixed(1)} mm.`:'This part has not been constructed at this step, or was hidden/removed.');text('connections',p.from||p.to?`Requested connection: ${p.from||'?'} → ${p.to||'?'}. See its “Part constructed” event for resolved placement.`:'No explicit attachment requested.');}
