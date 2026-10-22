@@ -4,6 +4,14 @@ Block AI for AutoCAD 2026.
 
 Windows AutoCAD plugin prototype: describe an object, preview a plan and optional front/right-side elevations, and insert a selected view as an editable native block. Type `AIBLOCK` to open the dockable panel.
 
+## v0.6.5: experimental relationship layout tools
+
+The local palette has a new **Use anchored layout tools (experimental)** checkbox, off by default. The AI chooses connected layout regions first; a generic engine resolves edge alignment, adjacency, relative sizes and containment. A separate detail call can select outlines/depths inside those locked regions. Review repairs edit stable part IDs, preserving unmentioned definitions; linked children follow their targets. No furniture templates or stored blocks were added. Native insertion, plan-only scope and the previous coordinate-overflow behavior remain intact.
+
+This is a tool experiment, not a demonstrated furniture-quality fix. Scripted checks cover six left/right sofa layouts at three sizes and review-driven edits. Live trials still produced invalid relationship graphs or repeated ineffective edits; the latest bounded sofa trial failed on duplicate arms and an undersized assembly. Enabling reasoning exhausted the response allowance before producing a layout, so it remains disabled. Repairs receive engine-resolved measurements; resolved numeric failures leave the feedback context, while failed/no-op edits retain the current blocker. Mathematical checks cannot establish whether a result looks like furniture. Keep the checkbox off to retain the earlier millimeter workflow.
+
+Restart all AutoCAD instances, `NETLOAD` `artifacts-v065\BlockAI.bundle\Contents\Windows\BlockAI.dll`, and run `AIBLOCK` (v0.6.5). Keep the core DLL beside it. For this experiment, enable the checkbox and inspect the recording after a generation. `artifacts-v065\constraint-demo.html` is an offline **scripted demonstration**, not live model output. See [tool contract, loading instructions and limits](docs/constraint-layout.md).
+
 ## v0.6.4: millimeter placement and grounded visual edits
 
 The local palette now drafts explicit `xMm`, `yMm`, `widthMm`, `depthMm`, and `gapMm` boxes. Whole-part replacements/additions use the same units, while polygon/curve points remain local fractions. The engine converts boxes internally and preserves their dimensions; a footprint mismatch is sent back for correction instead of silently stretching all parts. The legacy normalized workflow still supports the prior modest-overflow fitting behavior.

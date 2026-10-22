@@ -18,7 +18,7 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
     public static DesignPlan Parse(string json) => JsonSerializer.Deserialize<DesignPlan>(json, BlockSpec.JsonOptions)
         ?? throw new InvalidDataException("The model returned no design plan.");
 
-    public BlockSpec Build(string prompt,Action<ConstructionFrame>? observe=null,bool useVerticalDepth=false,bool preserveScale=false)
+    public BlockSpec Build(string prompt,Action<ConstructionFrame>? observe=null,bool useVerticalDepth=false,bool preserveScale=false,bool layoutOnly=false)
     {
         var origins=new Dictionary<Primitive,int>();
         var built=new List<(string Role,Primitive Geometry)>();
@@ -140,15 +140,15 @@ public sealed record DesignPlan(string Name, string Description, double Width, d
             if(!signatures.TryAdd(key,item.Role))
             {
                 if(signatures[key]==item.Role) continue;
-                throw Problem($"Parts '{signatures[key]}' and '{item.Role}' duplicate the same outline at the same level. Remove one or assign the intended above/below levels.",built.Where(b=>b.Role==signatures[key]||b.Role==item.Role).Select(b=>origins[b.Geometry]).ToArray());
+                if(!layoutOnly)throw Problem($"Parts '{signatures[key]}' and '{item.Role}' duplicate the same outline at the same level. Remove one or assign the intended above/below levels.",built.Where(b=>b.Role==signatures[key]||b.Role==item.Role).Select(b=>origins[b.Geometry]).ToArray());
             }
             uniqueBuilt.Add(item);
         }
         built=uniqueBuilt;
-        Emit("deduplicated","Removed identical repeated outlines with the same role; conflicting duplicates are rejected.");
-        if(chair&&Regex.IsMatch(prompt,@"\b(?:oval|elliptical|round)\s+seat\b",RegexOptions.IgnoreCase)&&!Parts.Any(p=>p.Role.Contains("seat",StringComparison.OrdinalIgnoreCase)&&p.Shape=="ellipse"))
+        Emit("deduplicated",layoutOnly?"Rough regions may coincide; conflicting outline/depth checks are deferred until the appearance stage.":"Removed identical repeated outlines with the same role; conflicting duplicates are rejected.");
+        if(!layoutOnly&&chair&&Regex.IsMatch(prompt,@"\b(?:oval|elliptical|round)\s+seat\b",RegexOptions.IgnoreCase)&&!Parts.Any(p=>p.Role.Contains("seat",StringComparison.OrdinalIgnoreCase)&&p.Shape=="ellipse"))
             throw new InvalidDataException("The request asks for an oval/round seat. Use the ellipse tool for the seat outline.");
-        if(chair&&Regex.IsMatch(prompt,@"\btapered\s+seat\b",RegexOptions.IgnoreCase)&&!Parts.Any(p=>p.Role.Contains("seat",StringComparison.OrdinalIgnoreCase)&&p.Shape is "trapezoid" or "polygon"))
+        if(!layoutOnly&&chair&&Regex.IsMatch(prompt,@"\btapered\s+seat\b",RegexOptions.IgnoreCase)&&!Parts.Any(p=>p.Role.Contains("seat",StringComparison.OrdinalIgnoreCase)&&p.Shape is "trapezoid" or "polygon"))
             throw new InvalidDataException("The request asks for a tapered seat. Use a trapezoid or a tapered custom polygon.");
         var slatRequest=Regex.Match(prompt,@"\b(?<n>[2-8]|two|three|four|five|six|seven|eight)\s+(?:back\s+)?slats\b",RegexOptions.IgnoreCase);
         if(slatRequest.Success)

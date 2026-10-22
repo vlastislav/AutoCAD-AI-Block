@@ -36,4 +36,7 @@ Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-edits.html" -Destin
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-edits.json" -Destination "$outputRoot\part-edit-demo.json"
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-placement.html" -Destination "$outputRoot\placement-demo.html"
 Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-placement.json" -Destination "$outputRoot\placement-demo.json"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-constraints.html" -Destination "$outputRoot\constraint-demo.html"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\viewer-constraints.json" -Destination "$outputRoot\constraint-demo.json"
+Copy-Item -LiteralPath "$projectRoot\artifacts-design\constraint-demo.png" -Destination "$outputRoot\constraint-demo.png"
 Write-Host "Ready: $outputRoot\BlockAI.bundle"

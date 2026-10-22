@@ -271,6 +271,8 @@ File.WriteAllText("artifacts-design/viewer-edits.html",editRecording.ToHtml());
 Console.WriteLine($"{passed} checks including symmetry and scoped edits passed.");
 await LayoutChecks.Run(Check);
 Console.WriteLine($"{passed} design checks including metric placement and visual editing passed.");
+await ConstraintChecks.Run(Check);
+Console.WriteLine($"{passed} design checks including anchored layout and staged repairs passed.");
 
 if(Array.IndexOf(args,"--render-recording") is var renderIndex&&renderIndex>=0&&renderIndex+1<args.Length)
 {
@@ -292,11 +294,12 @@ if(args.Contains("--live"))
         var liveReviewer=args.Contains("--no-review")?null:DesignAgent.DefaultModel;
         var liveRecording=new DesignRecording {Prompt=prompts[i],Model=liveModel,ReviewModel=liveReviewer};
         DesignResult generated;
+        using var liveDeadline=new CancellationTokenSource(TimeSpan.FromMinutes(5));
         var liveReferences=args.Contains("--references")?ReferenceLibrary.Load(ReferenceLibrary.DefaultDirectory,out _).Match(prompts[i],planOnly:!args.Contains("--elevations")):[];
         if(args.Contains("--references"))Console.WriteLine("References: "+string.Join("; ",liveReferences.Select(r=>r.Analysis.Name)));
-        try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),default,liveRecording,args.Contains("--elevations"),PlanRenderer.Png,liveReferences,
+        try {generated=await agent.GenerateAsync(prompts[i],liveModel,liveReviewer,PlanRenderer.Png,new Progress<string>(Console.WriteLine),liveDeadline.Token,liveRecording,args.Contains("--elevations"),PlanRenderer.Png,liveReferences,
             maxAttempts:args.Contains("--edits")?6:3,targetedRevisions:args.Contains("--edits"),requireSymmetry:args.Contains("--edits"),metricDraft:args.Contains("--metric"),
-            renderReference:args.Contains("--metric")?PlanRenderer.ReferencePng:null,visualEdits:args.Contains("--metric"));}
+            renderReference:args.Contains("--metric")?PlanRenderer.ReferencePng:null,visualEdits:args.Contains("--metric"),constraintLayout:args.Contains("--constraints"));}
         finally {liveRecording.TrySave("artifacts-design/live-recordings",out _,out _);}
         File.WriteAllText($"artifacts-design/design-{i+1}.json",JsonSerializer.Serialize(generated,BlockSpec.JsonOptions));
         File.WriteAllBytes($"artifacts-design/design-{i+1}.png",PlanRenderer.Png(generated.Block));

@@ -39,6 +39,14 @@
   check(api.getState().attempt===4&&api.getState().status==='succeeded','viewer replays a successful fourth edit attempt');
   api.load(JSON.parse(fixtures.placement));el('attempts').children[2].click();el('scrub').value=el('scrub').max;el('scrub').dispatchEvent(new Event('input'));
   check(el('left').querySelectorAll('.shape').length>0&&el('issue').textContent.includes('no parameter changes'),'stalled attempt displays retained geometry and the real blocking feedback');
+  api.load(JSON.parse(fixtures.constraints));
+  check(api.getState().status==='succeeded'&&el('notice').textContent.includes('DEMONSTRATION'),'anchored layout recording is clearly a demonstration');
+  const layoutStep=[...el('steps').children].find(b=>b.textContent.includes('Layout regions solved'));layoutStep.click();
+  check(el('message').textContent.includes('rough layout regions')&&el('parts').children.length===3,'rough solved layout remains inspectable separately from details');
+  el('parts').children[1].click();check(el('connections').textContent.includes('Stable ID: return')&&el('connections').textContent.includes('Target: main'),'part inspector exposes the actual anchor relationship');
+  [...el('attempts').children].find(b=>b.textContent.startsWith('Attempt 2 ')).click();el('scrub').value=el('scrub').max;el('scrub').dispatchEvent(new Event('input'));
+  check(el('left').querySelectorAll('.shape').length>0&&api.getState().attempt===2,'anchored repairs replay offline with final visible geometry');
+  el('parts').children[0].click();check(el('parameters').textContent.includes('rounded'),'final inspector uses the detail-stage geometry rather than the earlier rough box');
   api.load(JSON.parse(fixtures.unchanged));
   const unchangedStep=[...el('steps').children].find(b=>b.textContent.includes('Unchanged revision rejected'));unchangedStep.click();
   check(el('stage').classList.contains('fail')&&el('message').textContent.includes('same visible geometry'),'viewer explains why a renamed duplicate was not a revision');

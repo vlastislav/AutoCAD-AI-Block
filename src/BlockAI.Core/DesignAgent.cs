@@ -13,8 +13,14 @@ public sealed class DesignAgent(OllamaClient client)
         Func<BlockSpec,byte[]>? render,IProgress<string>? progress,CancellationToken cancellation,DesignRecording? recording=null,
         bool elevations=false,Func<DesignViews,byte[]>? renderViews=null,IReadOnlyList<ReferenceLesson>? references=null,
         int maxAttempts=3,bool targetedRevisions=false,bool requireSymmetry=false,bool metricDraft=false,
-        Func<ReferenceGeometry,byte[]>? renderReference=null,bool visualEdits=false)
+        Func<ReferenceGeometry,byte[]>? renderReference=null,bool visualEdits=false,bool constraintLayout=false)
     {
+        if(constraintLayout)
+        {
+            if(elevations)throw new ArgumentException("Relationship layouts currently support plan views only.");
+            return await new ConstraintDesignAgent(client).GenerateAsync(prompt,model,reviewModel,render,progress,cancellation,
+                recording,references,maxAttempts,requireSymmetry,renderReference,visualEdits);
+        }
         var currentAttempt=0;
         try
         {

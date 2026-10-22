@@ -7,7 +7,7 @@ public sealed record RecordedGeometry(int PartId,string Role,Primitive Geometry)
 public sealed record CoordinateFit(double MinX,double MinY,double ScaleX,double ScaleY);
 public sealed record ConstructionFrame(string Stage,string Message,string Units,RecordedGeometry[] Geometry,int? FocusPart=null,CoordinateFit? Fit=null,string View="plan");
 public sealed record DesignEvent(double ElapsedMs,int Attempt,string Stage,string Message,
-    DesignPlan? Plan=null,ConstructionFrame? Frame=null,VisualReview? Review=null,string? RawResponse=null,ReferenceLesson[]? References=null);
+    DesignPlan? Plan=null,ConstructionFrame? Frame=null,VisualReview? Review=null,string? RawResponse=null,ReferenceLesson[]? References=null,LayoutDraft? Layout=null);
 
 /// <summary>Observable requests and engine output only. No model reasoning, credentials or images.</summary>
 public sealed class DesignRecording
@@ -25,9 +25,9 @@ public sealed class DesignRecording
 
     // Diagnostic observation must never change generation behavior.
     public void Add(int attempt,string stage,string message,DesignPlan? plan=null,
-        ConstructionFrame? frame=null,VisualReview? review=null,string? raw=null,ReferenceLesson[]? references=null)
+        ConstructionFrame? frame=null,VisualReview? review=null,string? raw=null,ReferenceLesson[]? references=null,LayoutDraft? layout=null)
     {
-        try { Events.Add(new(clock.Elapsed.TotalMilliseconds,attempt,stage,message,plan,frame,review,raw,references)); }
+        try { Events.Add(new(clock.Elapsed.TotalMilliseconds,attempt,stage,message,plan,frame,review,raw,references,layout)); }
         catch { /* Recording is best effort. */ }
     }
     public void Finish(string status,string message,int attempt)

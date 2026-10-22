@@ -23,6 +23,7 @@ internal sealed class PromptPanel : UserControl
     private readonly CheckBox elevations = new() {Text="Generate plan, front and right-side views",Checked=false,Visible=false,AutoSize=true};
     private readonly CheckBox useReferences = new() {Text="Use matching reference analyses",Checked=true,AutoSize=true};
     private readonly CheckBox requireSymmetry = new() {Text="Check left/right symmetry (except asymmetric requests)",Checked=true,AutoSize=true};
+    private readonly CheckBox constraintLayout = new() {Text="Use anchored layout tools (experimental)",Checked=false,AutoSize=true};
     private readonly NumericUpDown attemptLimit = new() {Minimum=1,Maximum=10,Value=6};
     private readonly Label attemptLabel = new() {Text="Maximum generation attempts (edits after the first draft)",AutoSize=true};
     private readonly Button referenceLibrary = new() {Text="Reference library — names and design notes",Height=30};
@@ -63,7 +64,7 @@ internal sealed class PromptPanel : UserControl
         }
         void Label(string text) => Add(new Label { Text = text, AutoSize = true });
         Add(new Label { Text = "BLOCK AI", Font = new Font("Segoe UI", 17, FontStyle.Bold), AutoSize = true });
-        Label("v0.6.4 · Plan views · Edit-based revisions");
+        Label("v0.6.5 · Plan views · Anchored layout experiment");
         Label("Describe your block. Include dimensions if you know them.");
         Add(prompt);
         Label("Generation provider");
@@ -80,6 +81,7 @@ internal sealed class PromptPanel : UserControl
         Add(visualReview);
         Add(reviewModel);
         Add(requireSymmetry);
+        Add(constraintLayout);
         Add(attemptLabel);
         Add(attemptLimit);
         Add(useReferences);
@@ -115,7 +117,7 @@ internal sealed class PromptPanel : UserControl
             else { if (savePrevious) localModel = model.Text; model.Text = openAiModel; }
             apiKey.Visible = !IsLocal;
             visualReview.Visible=reviewModel.Visible=useReferences.Visible=referenceLibrary.Visible=referenceStatus.Visible=IsLocal;
-            requireSymmetry.Visible=attemptLabel.Visible=attemptLimit.Visible=IsLocal;
+            requireSymmetry.Visible=constraintLayout.Visible=attemptLabel.Visible=attemptLimit.Visible=IsLocal;
             startLocal.Visible = checkLocal.Visible = IsLocal;
             providerNote.Text = IsLocal
                 ? "AI designs the parts and layout. Geometry checks and optional preview review can request corrections."
@@ -225,7 +227,7 @@ internal sealed class PromptPanel : UserControl
                     visualReview.Checked?reviewModel.Text:null,PlanRenderer.Png,progress,cancellation.Token,recording,references:references,
                     maxAttempts:(int)attemptLimit.Value,targetedRevisions:true,requireSymmetry:requireSymmetry.Checked,metricDraft:true,
                     renderReference:model.Text.StartsWith("qwen3.5",StringComparison.OrdinalIgnoreCase)?PlanRenderer.ReferencePng:null,
-                    visualEdits:model.Text.StartsWith("qwen3.5",StringComparison.OrdinalIgnoreCase));
+                    visualEdits:model.Text.StartsWith("qwen3.5",StringComparison.OrdinalIgnoreCase),constraintLayout:constraintLayout.Checked);
                 generated=result.Block;
                 if(result.Front is not null&&result.Side is not null)generatedViews=new(generated,result.Front,result.Side);
             }
@@ -269,7 +271,7 @@ internal sealed class PromptPanel : UserControl
         provider.Enabled = startLocal.Enabled = checkLocal.Enabled = !busy;
         visualReview.Enabled=reviewModel.Enabled=elevations.Enabled=!busy;
         useReferences.Enabled=referenceLibrary.Enabled=!busy;
-        requireSymmetry.Enabled=attemptLimit.Enabled=!busy;
+        requireSymmetry.Enabled=constraintLayout.Enabled=attemptLimit.Enabled=!busy;
         drawingView.Enabled=!busy&&generatedViews is not null;
         cancel.Enabled = busy;
         insert.Enabled = !busy && spec is not null;
